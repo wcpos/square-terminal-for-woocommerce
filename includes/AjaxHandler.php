@@ -86,7 +86,10 @@ final class AjaxHandler {
 		);
 
 		$order->update_meta_data( '_sqtwc_checkout_id', $result['id'] );
-		$order->update_meta_data( '_sqtwc_payment_log', array( 'Terminal checkout created: ' . $result['id'] ) );
+		$payment_log   = $order->get_meta( '_sqtwc_payment_log', true );
+		$payment_log   = is_array( $payment_log ) ? $payment_log : array();
+		$payment_log[] = 'Terminal checkout created: ' . $result['id'];
+		$order->update_meta_data( '_sqtwc_payment_log', $payment_log );
 		$order->save();
 
 		Logger::info( 'Terminal checkout created', array( 'checkout_id' => $result['id'] ), $order );
@@ -128,7 +131,16 @@ final class AjaxHandler {
 			);
 		}
 
-		$checkout_id = sanitize_text_field( $request['checkout_id'] ?? $order->get_meta( '_sqtwc_checkout_id', true ) );
+		$stored_id    = sanitize_text_field( (string) $order->get_meta( '_sqtwc_checkout_id', true ) );
+		$requested_id = sanitize_text_field( $request['checkout_id'] ?? '' );
+		if ( '' !== $requested_id && $requested_id !== $stored_id ) {
+			return array(
+				'status' => 400,
+				'error'  => 'Checkout ID does not match this order.',
+			);
+		}
+
+		$checkout_id = $stored_id;
 		if ( '' === $checkout_id ) {
 			return array(
 				'status' => 400,
@@ -138,7 +150,10 @@ final class AjaxHandler {
 
 		$result = $this->terminal_adapter->cancel_checkout( $checkout_id );
 		$order->update_meta_data( '_sqtwc_checkout_idempotency_key', '' );
-		$order->update_meta_data( '_sqtwc_payment_log', array( 'Terminal checkout canceled: ' . $checkout_id ) );
+		$payment_log   = $order->get_meta( '_sqtwc_payment_log', true );
+		$payment_log   = is_array( $payment_log ) ? $payment_log : array();
+		$payment_log[] = 'Terminal checkout canceled: ' . $checkout_id;
+		$order->update_meta_data( '_sqtwc_payment_log', $payment_log );
 		$order->save();
 
 		Logger::info( 'Terminal checkout canceled', array( 'checkout_id' => $checkout_id ), $order );
