@@ -1,0 +1,3 @@
+<?php
+namespace WCPOS\WooCommercePOS\SquareTerminal;
+final class PaymentRequestToken { public static function create(int $order_id, int $expires): string { $payload = base64_encode(wp_json_encode(array('order_id'=>$order_id,'expires'=>$expires))); $sig = hash_hmac('sha256', $payload, wp_salt('auth')); return $payload.'.'.$sig; } public static function verify(string $token, int $order_id): bool { $parts=explode('.', $token, 2); if (2!==count($parts)) return false; [$payload,$sig]=$parts; if (!hash_equals(hash_hmac('sha256',$payload,wp_salt('auth')),$sig)) return false; $data=json_decode(base64_decode($payload,true) ?: '', true); return is_array($data) && (int)($data['order_id']??0)===$order_id && (int)($data['expires']??0) >= time(); }}

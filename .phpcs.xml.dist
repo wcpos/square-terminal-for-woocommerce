@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<ruleset name="Square Terminal for WooCommerce">
+  <file>square-terminal-for-woocommerce.php</file>
+  <file>includes</file>
+  <rule ref="Generic.PHP.DisallowShortOpenTag"/>
+  <rule ref="Generic.PHP.LowerCaseConstant"/>
+</ruleset>

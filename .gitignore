@@ -1,0 +1,5 @@
+/vendor/
+/vendor_scoped/
+/build/
+/tools/php-scoper.phar
+.phpunit.cache/
