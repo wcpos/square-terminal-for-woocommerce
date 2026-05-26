@@ -1,0 +1,11 @@
+<?php
+namespace WCPOS\WooCommercePOS\SquareTerminal;
+class Gateway extends \WC_Payment_Gateway {
+	public function __construct() { $this->id='sqtwc'; $this->method_title='Square Terminal'; $this->method_description='Collect in-person payments with Square Terminal.'; $this->has_fields=false; $this->init_form_fields(); $this->init_settings(); }
+	public static function register_gateway(array $gateways): array { $gateways[] = self::class; return $gateways; }
+	public function init_form_fields(): void { $this->form_fields = array('enabled'=>array('title'=>'Enable','type'=>'checkbox'), 'webhook_notification_url'=>array('title'=>'Webhook notification URL','type'=>'text','description'=>'Must exactly match the URL configured in Square Developer Dashboard.')); }
+	public function process_payment($order_id) { $order = wc_get_order($order_id); if (!$order) { wc_add_notice(__('Order not found.', 'square-terminal-for-woocommerce'), 'error'); return array('result'=>'failure'); } if ($order->is_paid()) { return array('result'=>'success','redirect'=>$this->get_return_url($order)); } return array('result'=>'success','redirect'=>$order->get_checkout_payment_url(true)); }
+	public function payment_fields(): void { echo self::render_payment_ui(0, array()); }
+	public static function render_payment_ui(int $order_id, array $log = array()): string { $items = ''; foreach ($log as $line) { $items .= '<li>'.esc_html($line).'</li>'; } return '<div id="sqtwc-payment"><h3>Square Terminal Payment</h3><label>Terminal Device ID <input id="sqtwc-device-id" /></label><button id="sqtwc-start-payment">Start Payment</button><button id="sqtwc-cancel-payment">Cancel Payment</button><div id="sqtwc-status" role="status"></div><h4>Payment Log</h4><ol id="sqtwc-payment-log">'.$items.'</ol></div>'; }
+	public static function render_admin_fields(): string { return '<p>Webhook notification URL must exactly match Square Developer Dashboard.</p><input name="webhook_notification_url" value="'.esc_attr(Settings::get_webhook_notification_url()).'" /><button id="sqtwc-create-device-code">Create Device Code</button><button id="sqtwc-validate-settings">Validate Settings</button><p>Use dev-pro.wcpos.com for hosted Square Sandbox validation.</p>'; }
+}

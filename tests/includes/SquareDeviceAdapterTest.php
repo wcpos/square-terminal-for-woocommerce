@@ -1,0 +1,6 @@
+<?php
+namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
+use PHPUnit\Framework\TestCase; use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\CreateDeviceCodeRequest; use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\{CreateDeviceCodeResponse, DeviceCode};
+final class SpyCodesClient { public ?CreateDeviceCodeRequest $createdRequest=null; public function create(CreateDeviceCodeRequest $request){ $this->createdRequest=$request; return new CreateDeviceCodeResponse(['deviceCode'=>new DeviceCode(['id'=>'dc_1','name'=>'Front','code'=>'ABCD','deviceId'=>'dev_1','productType'=>'TERMINAL_API','locationId'=>'LOC','status'=>'PAIRED'])]); }}
+final class SquareDeviceAdapterTest extends TestCase { public function test_create_device_code_uses_typed_request(): void { $spy=new SpyCodesClient(); $client=(object)['devices'=>(object)['codes'=>$spy]]; $result=(new SquareDeviceAdapter($client))->create_device_code(['name'=>'Front','location_id'=>'LOC','idempotency_key'=>'idem']); $dc=$spy->createdRequest->getDeviceCode(); self::assertSame('TERMINAL_API',$dc->getProductType()); self::assertSame('LOC',$dc->getLocationId()); self::assertSame('Front',$dc->getName()); self::assertSame('ABCD',$result['code']); }}
