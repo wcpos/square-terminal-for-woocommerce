@@ -31,4 +31,9 @@ spl_autoload_register(static function (string $class): void {
     }
 });
 PHP_AUTLOAD;
-file_put_contents(__DIR__ . '/../vendor_scoped/autoload.php', $autoload);
+$target = __DIR__ . '/../vendor_scoped/autoload.php';
+if ( false === file_put_contents( $target, $autoload ) ) {
+	$error = error_get_last();
+	fwrite( STDERR, 'Failed writing scoped autoload: ' . $target . ' ' . ( $error['message'] ?? '' ) . PHP_EOL );
+	exit( 1 );
+}

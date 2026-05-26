@@ -22,6 +22,8 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$this->init_form_fields();
 		$this->init_settings();
+
+		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 	}
 
 	/**
@@ -125,7 +127,7 @@ class Gateway extends \WC_Payment_Gateway {
 		}
 
 		return sprintf(
-			'<div id="sqtwc-payment" data-order-id="%1$d"><h3>%2$s</h3><label>%3$s <input id="sqtwc-device-id" /></label><button id="sqtwc-start-payment">%4$s</button><button id="sqtwc-cancel-payment">%5$s</button><div id="sqtwc-status" role="status"></div><h4>%6$s</h4><ol id="sqtwc-payment-log">%7$s</ol></div>',
+			'<div id="sqtwc-payment" data-order-id="%1$d"><h3>%2$s</h3><label>%3$s <input id="sqtwc-device-id" /></label><button type="button" id="sqtwc-start-payment">%4$s</button><button type="button" id="sqtwc-cancel-payment">%5$s</button><div id="sqtwc-status" role="status"></div><h4>%6$s</h4><ol id="sqtwc-payment-log">%7$s</ol></div>',
 			$order_id,
 			esc_html__( 'Square Terminal Payment', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Terminal Device ID', 'square-terminal-for-woocommerce' ),

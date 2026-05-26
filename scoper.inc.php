@@ -9,7 +9,7 @@
  * @package WCPOS\WooCommercePOS\SquareTerminal
  */
 
-$finder_class = '_HumbugBoxc8f94d632dc5\\Symfony\\Component\\Finder\\Finder';
+$finder_class = Isolated\Symfony\Component\Finder\Finder::class;
 $finder       = $finder_class::create()
 	->files()
 	->in( __DIR__ . '/vendor' )

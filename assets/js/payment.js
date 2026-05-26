@@ -7,8 +7,10 @@
     list.appendChild(item);
   };
   document.addEventListener('click', function (event) {
-    if (event.target && event.target.id === 'sqtwc-start-payment') log('Start Payment requested');
-    if (event.target && event.target.id === 'sqtwc-cancel-payment') log('Cancel Payment requested');
+    const target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest('#sqtwc-start-payment')) log('Start Payment requested');
+    if (target.closest('#sqtwc-cancel-payment')) log('Cancel Payment requested');
   });
   window.sqtwcPaymentLogError = function (error) { log('error: ' + String(error && error.message ? error.message : error)); };
 }());

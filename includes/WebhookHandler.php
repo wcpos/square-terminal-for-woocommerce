@@ -37,7 +37,8 @@ final class WebhookHandler {
 	 * @return array<string,mixed>
 	 */
 	public function handle( string $body, array $headers ): array {
-		$signature = (string) ( $headers['x-square-hmacsha256-signature'] ?? $headers['X-Square-HmacSha256-Signature'] ?? '' );
+		$headers   = array_change_key_case( $headers, CASE_LOWER );
+		$signature = (string) ( $headers['x-square-hmacsha256-signature'] ?? '' );
 
 		if ( ! $this->verifier->verify( $body, $signature, Settings::get_webhook_signature_key(), Settings::get_webhook_notification_url() ) ) {
 			return array(
@@ -97,6 +98,7 @@ final class WebhookHandler {
 		if ( 'COMPLETED' === ( $checkout['status'] ?? '' ) ) {
 			$payment_ids = (array) ( $checkout['payment_ids'] ?? array() );
 			$order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
+			$order->update_meta_data( '_sqtwc_checkout_idempotency_key', '' );
 
 			if ( ! $order->is_paid() ) {
 				$transaction_id = (string) ( $payment_ids[0] ?? '' );

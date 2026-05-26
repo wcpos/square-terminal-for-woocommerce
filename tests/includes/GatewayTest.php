@@ -1,5 +1,7 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
-use PHPUnit\Framework\TestCase; use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use PHPUnit\Framework\TestCase; use WCPOS\WooCommercePOS\SquareTerminal\{Gateway,Plugin};
 final class GatewayTest extends TestCase { public function test_register_gateway_appends_class(): void { self::assertContains(Gateway::class, Gateway::register_gateway(['Other'])); }
+ public function test_constructor_hooks_gateway_settings_save(): void { $GLOBALS['sqtwc_actions']=array(); $gateway=new Gateway(); self::assertContains([$gateway,'process_admin_options'],$GLOBALS['sqtwc_actions']['woocommerce_update_options_payment_gateways_sqtwc']); }
+ public function test_plugin_registers_payment_and_webhook_entrypoints(): void { $GLOBALS['sqtwc_actions']=array(); (new Plugin())->init(); self::assertArrayHasKey('wp_ajax_sqtwc_create_terminal_checkout',$GLOBALS['sqtwc_actions']); self::assertArrayHasKey('wp_ajax_sqtwc_cancel_terminal_checkout',$GLOBALS['sqtwc_actions']); self::assertArrayHasKey('rest_api_init',$GLOBALS['sqtwc_actions']); (new Plugin())->register_rest_routes(); self::assertArrayHasKey('sqtwc/v1/webhook',$GLOBALS['sqtwc_rest_routes']); }
  public function test_process_payment_redirects_unpaid_to_order_pay_and_paid_to_thank_you(): void { $order=new \SQTWC_Test_Order(99); $GLOBALS['sqtwc_orders'][99]=$order; $gateway=new Gateway(); $result=$gateway->process_payment(99); self::assertSame('success',$result['result']); self::assertStringContainsString('/checkout/order-pay/99/', $result['redirect']); $order->paid=true; $result=$gateway->process_payment(99); self::assertSame('/thank-you',$result['redirect']); }}

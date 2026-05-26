@@ -22,9 +22,9 @@
     "lint-report": "phpcs --standard=./.phpcs.xml.dist --report=checkstyle",
     "test": "phpunit --configuration phpunit.xml.dist",
     "build:scoped-vendor": [
-      "test -f tools/php-scoper.phar || (mkdir -p tools && curl -L https://github.com/humbug/php-scoper/releases/latest/download/php-scoper.phar -o tools/php-scoper.phar)",
+      "test -f tools/php-scoper.phar || (mkdir -p tools && curl -L https://github.com/humbug/php-scoper/releases/download/0.18.19/php-scoper.phar -o tools/php-scoper.phar)",
       "rm -rf build/scoped vendor_scoped",
-      "php tools/php-scoper.phar add-prefix --config=scoper.inc.php --output-dir=build/scoped --force",
+      "php tools/php-scoper.phar add-prefix --config=scoper.inc.php --prefix=WCPOS\\\\WooCommercePOS\\\\SquareTerminal\\\\Vendor --output-dir=build/scoped --force",
       "mkdir -p vendor_scoped",
       "cp -R build/scoped/* vendor_scoped/",
       "php tools/fix-scoped-autoload.php"
