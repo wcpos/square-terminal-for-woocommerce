@@ -1,0 +1,57 @@
+{
+  "name": "wcpos/square-terminal-for-woocommerce",
+  "description": "Square Terminal payments for WooCommerce.",
+  "type": "wordpress-plugin",
+  "license": "GPL-3.0-or-later",
+  "require": {
+    "php": ">=8.1",
+    "square/square": "^45.1"
+  },
+  "require-dev": {
+    "dealerdirect/phpcodesniffer-composer-installer": "v1.2.1",
+    "phpcompatibility/phpcompatibility-wp": "2.1.8",
+    "phpunit/phpunit": "^10.5",
+    "sirbrillig/phpcs-variable-analysis": "v2.13.0",
+    "squizlabs/php_codesniffer": "3.13.5",
+    "woocommerce/woocommerce-sniffs": "1.0.1",
+    "wp-coding-standards/wpcs": "3.3.0"
+  },
+  "scripts": {
+    "format": "phpcbf --standard=./.phpcs.xml.dist --report-summary --report-source",
+    "lint": "phpcs --standard=./.phpcs.xml.dist",
+    "lint-report": "phpcs --standard=./.phpcs.xml.dist --report=checkstyle",
+    "test": "phpunit --configuration phpunit.xml.dist",
+    "build:scoped-vendor": [
+      "test -f tools/php-scoper.phar || (mkdir -p tools && curl -L https://github.com/humbug/php-scoper/releases/download/0.18.19/php-scoper.phar -o tools/php-scoper.phar)",
+      "rm -rf build/scoped vendor_scoped",
+      "php tools/php-scoper.phar add-prefix --config=scoper.inc.php --prefix=WCPOS\\\\WooCommercePOS\\\\SquareTerminal\\\\Vendor --output-dir=build/scoped --force",
+      "mkdir -p vendor_scoped",
+      "cp -R build/scoped/* vendor_scoped/",
+      "php tools/fix-scoped-autoload.php"
+    ]
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    },
+    "platform": {
+      "php": "8.1.0"
+    },
+    "platform-check": false,
+    "process-timeout": 0,
+    "optimize-autoloader": true,
+    "vendor-dir": "vendor",
+    "sort-packages": true
+  },
+  "authors": [
+    {
+      "name": "kilbot",
+      "email": "paul@kilbot.com"
+    }
+  ],
+  "autoload": {
+    "psr-4": {
+      "WCPOS\\WooCommercePOS\\SquareTerminal\\": "includes/"
+    }
+  }
+}

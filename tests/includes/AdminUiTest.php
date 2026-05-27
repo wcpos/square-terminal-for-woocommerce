@@ -1,0 +1,5 @@
+<?php
+namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
+use PHPUnit\Framework\TestCase; use WCPOS\WooCommercePOS\SquareTerminal\{Gateway,Settings};
+final class AdminUiTest extends TestCase { public function test_admin_ui_shows_exact_webhook_url_help_and_device_buttons(): void { $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']=['webhook_notification_url'=>'https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook']; Settings::reset_cache_for_tests(); $html=Gateway::render_admin_fields(); self::assertStringContainsString('exactly match Square Developer Dashboard',$html); self::assertStringContainsString('https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook',$html); self::assertStringContainsString('Create Device Code',$html); }
+ public function test_admin_js_calls_device_code_and_validation_endpoints(): void { $js=file_get_contents(dirname(__DIR__,2).'/assets/js/admin.js') ?: ''; self::assertStringContainsString('create_device_code',$js); self::assertStringContainsString('validate_settings',$js); }}

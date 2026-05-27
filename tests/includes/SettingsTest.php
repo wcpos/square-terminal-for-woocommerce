@@ -1,0 +1,8 @@
+<?php
+namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
+use PHPUnit\Framework\TestCase; use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+final class SettingsTest extends TestCase { protected function setUp(): void { $GLOBALS['sqtwc_options']=array(); $GLOBALS['sqtwc_get_option_count']=array(); Settings::reset_cache_for_tests(); }
+ public function test_gateway_settings_are_memoized_and_resettable(): void { $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']=['enabled'=>'yes']; self::assertSame('yes', Settings::get_gateway_settings()['enabled']); Settings::get_gateway_settings(); self::assertSame(1,$GLOBALS['sqtwc_get_option_count']['woocommerce_sqtwc_settings']); Settings::reset_cache_for_tests(); Settings::get_gateway_settings(); self::assertSame(2,$GLOBALS['sqtwc_get_option_count']['woocommerce_sqtwc_settings']); }
+ public function test_access_token_selected_by_environment(): void { $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']=['environment'=>'sandbox','sandbox_access_token'=>'sandbox','production_access_token'=>'prod']; Settings::reset_cache_for_tests(); self::assertSame('sandbox', Settings::get_access_token()); $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['environment']='production'; Settings::reset_cache_for_tests(); self::assertSame('prod', Settings::get_access_token()); }
+ public function test_explicit_webhook_notification_url(): void { $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']=['webhook_notification_url'=>'https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook']; Settings::reset_cache_for_tests(); self::assertSame('https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook', Settings::get_webhook_notification_url()); }
+}

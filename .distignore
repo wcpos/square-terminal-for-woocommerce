@@ -1,0 +1,16 @@
+/.git
+/.github
+/.editorconfig
+/.phpcs.xml.dist
+/.phpunit.cache
+/vendor
+/build
+/tests
+/tools
+/CONTEXT.md
+/docs/adr
+/docs/superpowers
+/docs/testing
+/composer.lock
+/phpunit.xml.dist
+/scoper.inc.php
