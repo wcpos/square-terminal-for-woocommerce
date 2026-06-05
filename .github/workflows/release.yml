@@ -63,7 +63,11 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.1'
+          # Build with 8.2: PHP-Scoper requires ^8.2. Runtime deps are still
+          # resolved for 8.1 via the composer "platform" config, and the
+          # scoped output is PHP-version-agnostic, so the plugin's 8.1
+          # minimum is unaffected.
+          php-version: '8.2'
           tools: composer, wp-cli
 
       - name: Install runtime dependencies
