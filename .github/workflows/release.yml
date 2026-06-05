@@ -31,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Read plugin version
         id: version
@@ -61,9 +63,13 @@ jobs:
 
       - name: Set up PHP
         if: steps.check.outputs.exists == 'false'
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc
         with:
-          php-version: '8.1'
+          # Build with 8.2: PHP-Scoper requires ^8.2. Runtime deps are still
+          # resolved for 8.1 via the composer "platform" config, and the
+          # scoped output is PHP-version-agnostic, so the plugin's 8.1
+          # minimum is unaffected.
+          php-version: '8.2'
           tools: composer, wp-cli
 
       - name: Install runtime dependencies
