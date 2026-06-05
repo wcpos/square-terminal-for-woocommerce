@@ -1,0 +1,79 @@
+name: Release
+
+# Cuts a GitHub Release whenever the plugin header version changes on main.
+# The build is scoped with PHP-Scoper and packaged with the same .distignore
+# rules used for distribution, then attached as
+# square-terminal-for-woocommerce.zip so the WCPOS extensions catalog can pick
+# it up automatically.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - square-terminal-for-woocommerce.php
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read plugin version
+        id: version
+        run: |
+          VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.\-]*' square-terminal-for-woocommerce.php | head -n1)
+          if [ -z "$VERSION" ]; then
+            echo "Could not determine plugin version from header" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $VERSION"
+
+      - name: Check whether release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.version.outputs.version }} already exists; skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up PHP
+        if: steps.check.outputs.exists == 'false'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer, wp-cli
+
+      - name: Install runtime dependencies
+        if: steps.check.outputs.exists == 'false'
+        run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
+
+      - name: Build scoped vendor
+        if: steps.check.outputs.exists == 'false'
+        run: composer run-script build:scoped-vendor
+
+      - name: Package distributable zip
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          wp package install wp-cli/dist-archive-command:@stable
+          wp dist-archive . ./square-terminal-for-woocommerce.zip \
+            --plugin-dirname=square-terminal-for-woocommerce
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            ./square-terminal-for-woocommerce.zip \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes
