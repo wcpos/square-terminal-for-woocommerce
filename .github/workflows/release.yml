@@ -5,6 +5,10 @@ name: Release
 # rules used for distribution, then attached as
 # square-terminal-for-woocommerce.zip so the WCPOS extensions catalog can pick
 # it up automatically.
+#
+# It can also be run manually from the Actions tab (workflow_dispatch), e.g. to
+# re-cut a release after a failed run. Tick "force" to replace an existing
+# release for the current header version.
 
 on:
   push:
@@ -12,6 +16,12 @@ on:
       - main
     paths:
       - square-terminal-for-woocommerce.php
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Replace the release if it already exists for the current version
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,11 +49,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if ! gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.force }}" = "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.version.outputs.version }} exists; force re-release requested."
+          else
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Release v${{ steps.version.outputs.version }} already exists; skipping."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up PHP
@@ -78,6 +91,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            gh release delete "v${{ steps.version.outputs.version }}" --yes --cleanup-tag || true
+          fi
           gh release create "v${{ steps.version.outputs.version }}" \
             ./square-terminal-for-woocommerce.zip \
             --target "$GITHUB_SHA" \
