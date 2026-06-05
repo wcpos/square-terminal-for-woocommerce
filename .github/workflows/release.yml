@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
 
@@ -63,7 +63,7 @@ jobs:
 
       - name: Set up PHP
         if: steps.check.outputs.exists == 'false'
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc
         with:
           # Build with 8.2: PHP-Scoper requires ^8.2. Runtime deps are still
           # resolved for 8.1 via the composer "platform" config, and the
