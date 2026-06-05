@@ -70,7 +70,7 @@ jobs:
           # scoped output is PHP-version-agnostic, so the plugin's 8.1
           # minimum is unaffected.
           php-version: '8.2'
-          tools: composer, wp-cli
+          tools: composer
 
       - name: Install runtime dependencies
         if: steps.check.outputs.exists == 'false'
@@ -83,14 +83,21 @@ jobs:
       - name: Package distributable zip
         if: steps.check.outputs.exists == 'false'
         run: |
-          wp package install wp-cli/dist-archive-command:@stable
-          wp dist-archive . ./square-terminal-for-woocommerce.zip \
-            --plugin-dirname=square-terminal-for-woocommerce
-          if [ ! -s ./square-terminal-for-woocommerce.zip ]; then
+          PLUGIN=square-terminal-for-woocommerce
+          STAGE="$RUNNER_TEMP/$PLUGIN"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          # Stage the plugin honoring .distignore (the single source of truth
+          # for what ships) and zip it. Keeps vendor_scoped; drops vendor, dev
+          # tooling, tests, docs and build artifacts. Avoids wp-cli/Composer so
+          # packaging needs no network or GitHub token.
+          rsync -a --exclude-from='.distignore' ./ "$STAGE/"
+          ( cd "$RUNNER_TEMP" && zip -rq "$GITHUB_WORKSPACE/$PLUGIN.zip" "$PLUGIN" )
+          if [ ! -s "$PLUGIN.zip" ]; then
             echo "Distributable zip was not created or is empty" >&2
             exit 1
           fi
-          echo "Packaged $(du -h ./square-terminal-for-woocommerce.zip | cut -f1) archive"
+          echo "Packaged $(du -h "$PLUGIN.zip" | cut -f1) archive"
 
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
