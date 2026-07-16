@@ -1,9 +1,27 @@
 name: Release
 
+# Cuts a GitHub Release whenever the plugin header version changes on main.
+# The build is scoped with PHP-Scoper and packaged with the same .distignore
+# rules used for distribution, then attached as
+# square-terminal-for-woocommerce.zip so the WCPOS extensions catalog can pick
+# it up automatically.
+#
+# It can also be run manually from the Actions tab (workflow_dispatch), e.g. to
+# re-cut a release after a failed run. Tick "force" to replace an existing
+# release for the current header version.
+
 on:
   push:
     branches:
       - main
+    paths:
+      - square-terminal-for-woocommerce.php
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Replace the release if it already exists for the current version
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -13,94 +31,143 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
-      - name: Check if release is needed
-        id: check_release
+      - name: Read plugin version
+        id: version
         run: |
           set -euo pipefail
 
-          VERSION=$(grep -oP "Version:\s*\K\d+(\.\d+)*" square-terminal-for-woocommerce.php)
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Error: Invalid version format: $VERSION"
+          VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.\-]*' square-terminal-for-woocommerce.php | head -n1)
+          if [ -z "$VERSION" ]; then
+            echo "Could not determine plugin version from header" >&2
             exit 1
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Plugin version: $VERSION"
 
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          git fetch --prune --tags
-
-          if ! git tag | grep -qx "v$VERSION"; then
-            echo "Version has changed. Creating new release..."
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if ! gh release view "v$VERSION" --json assets --jq '.assets[].name' | grep -qx 'square-terminal-for-woocommerce.zip'; then
-            echo "Release exists without ZIP asset. Rebuilding and uploading asset..."
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Version has not changed and ZIP asset already exists. Skipping release..."
-          echo "release=false" >> "$GITHUB_OUTPUT"
+      - name: Check whether release is needed
+        id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
 
-      - name: Setup PHP
-        if: steps.check_release.outputs.release == 'true'
-        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # v2.35.5
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+          ASSET="square-terminal-for-woocommerce.zip"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            MODE=create
+            echo "Release $TAG does not exist; creating it."
+          elif [ "${{ inputs.force }}" = "true" ]; then
+            MODE=replace
+            echo "Release $TAG exists; force re-release requested."
+          elif ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ASSET"; then
+            MODE=repair
+            echo "Release $TAG exists without $ASSET; rebuilding and uploading it."
+          else
+            MODE=skip
+            echo "Release $TAG already has $ASSET; skipping."
+          fi
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = "skip" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up PHP
+        if: steps.check.outputs.release == 'true'
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc
         with:
-          php-version: '8.1'
-          coverage: none
+          # Build with 8.2: PHP-Scoper requires ^8.2. Runtime deps are still
+          # resolved for 8.1 via the composer "platform" config, and the
+          # scoped output is PHP-version-agnostic, so the plugin's 8.1
+          # minimum is unaffected.
+          php-version: '8.2'
+          tools: composer
 
-      - name: Install composer dependencies
-        if: steps.check_release.outputs.release == 'true'
-        run: composer install --no-dev --prefer-dist --no-progress
+      - name: Install runtime dependencies
+        if: steps.check.outputs.release == 'true'
+        run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
 
       - name: Build scoped vendor
-        if: steps.check_release.outputs.release == 'true'
-        run: composer run build:scoped-vendor
+        if: steps.check.outputs.release == 'true'
+        run: composer run-script build:scoped-vendor
 
-      - name: Build ZIP
-        if: steps.check_release.outputs.release == 'true'
+      - name: Package distributable zip
+        if: steps.check.outputs.release == 'true'
         run: |
           set -euo pipefail
 
-          STAGE=$(mktemp -d)/square-terminal-for-woocommerce
+          PLUGIN=square-terminal-for-woocommerce
+          STAGE="$RUNNER_TEMP/$PLUGIN"
+          rm -rf "$STAGE"
           mkdir -p "$STAGE"
-          cp square-terminal-for-woocommerce.php readme.txt "$STAGE/"
-          cp -R includes assets vendor_scoped "$STAGE/"
-          if [ -d languages ]; then cp -R languages "$STAGE/"; fi
-
-          (cd "$(dirname "$STAGE")" && zip -rq square-terminal-for-woocommerce.zip square-terminal-for-woocommerce)
-          mv "$(dirname "$STAGE")/square-terminal-for-woocommerce.zip" .
-
-      - name: Create release and upload ZIP
-        if: steps.check_release.outputs.release == 'true'
-        run: |
-          set -euo pipefail
-
-          NOTES_FILE="docs/releases/$VERSION.md"
-          NOTES_ARGS=(--notes "Release v$VERSION")
-          if [ -f "$NOTES_FILE" ]; then
-            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          # Stage the plugin honoring .distignore (the single source of truth
+          # for what ships) and zip it. Keeps vendor_scoped; drops vendor, dev
+          # tooling, tests, docs and build artifacts. Avoids wp-cli/Composer so
+          # packaging needs no network or GitHub token.
+          rsync -a --exclude-from='.distignore' ./ "$STAGE/"
+          if ! find "$STAGE" -mindepth 1 -type f -print -quit | grep -q .; then
+            echo "Distributable zip would be empty" >&2
+            exit 1
           fi
-
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release upload "v$VERSION" square-terminal-for-woocommerce.zip --clobber
-            gh release edit "v$VERSION" "${NOTES_ARGS[@]}"
-          else
-            gh release create "v$VERSION" \
-              square-terminal-for-woocommerce.zip \
-              --title "Release v$VERSION" \
-              "${NOTES_ARGS[@]}"
+          ( cd "$RUNNER_TEMP" && zip -rq "$GITHUB_WORKSPACE/$PLUGIN.zip" "$PLUGIN" )
+          if [ ! -s "$PLUGIN.zip" ]; then
+            echo "Distributable zip was not created or is empty" >&2
+            exit 1
           fi
+          echo "Packaged $(du -h "$PLUGIN.zip" | cut -f1) archive"
+
+      - name: Publish GitHub Release
+        if: steps.check.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+          ZIP="./square-terminal-for-woocommerce.zip"
+          NOTES_FILE="docs/releases/$VERSION.md"
+          CREATE_NOTES_ARGS=(--generate-notes)
+          EDIT_NOTES_ARGS=(--notes "Release $TAG")
+          if [ -f "$NOTES_FILE" ]; then
+            CREATE_NOTES_ARGS=(--notes-file "$NOTES_FILE")
+            EDIT_NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          fi
+
+          case "${{ steps.check.outputs.mode }}" in
+            replace)
+              gh release delete "$TAG" --yes --cleanup-tag
+              gh release create "$TAG" "$ZIP" \
+                --target "$GITHUB_SHA" \
+                --title "$TAG" \
+                "${CREATE_NOTES_ARGS[@]}"
+              ;;
+            repair)
+              gh release upload "$TAG" "$ZIP" --clobber
+              gh release edit "$TAG" \
+                --title "$TAG" \
+                "${EDIT_NOTES_ARGS[@]}"
+              ;;
+            create)
+              gh release create "$TAG" "$ZIP" \
+                --target "$GITHUB_SHA" \
+                --title "$TAG" \
+                "${CREATE_NOTES_ARGS[@]}"
+              ;;
+            *)
+              echo "Unexpected release mode: ${{ steps.check.outputs.mode }}" >&2
+              exit 1
+              ;;
+          esac
