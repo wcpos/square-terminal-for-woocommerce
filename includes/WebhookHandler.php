@@ -7,26 +7,42 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\WebhookSignatureVerifier;
 
 /**
  * Processes verified Square webhooks.
  */
 final class WebhookHandler {
-	/**
-	 * Signature verifier.
-	 *
-	 * @var WebhookSignatureVerifier|object
-	 */
+	/** @var WebhookSignatureVerifier|object */
 	private $verifier;
+
+	/** @var CheckoutReconciler|object */
+	private $reconciler;
+
+	/** @var OrderLock */
+	private OrderLock $order_lock;
 
 	/**
 	 * Constructor.
 	 *
-	 * @param WebhookSignatureVerifier|object|null $verifier Signature verifier.
+	 * @param WebhookSignatureVerifier|object|null $verifier   Signature verifier.
+	 * @param CheckoutReconciler|object|null       $reconciler Checkout reconciler.
+	 * @param OrderLock|null                       $order_lock Per-order mutation lock.
 	 */
-	public function __construct( $verifier = null ) {
+	public function __construct( $verifier = null, $reconciler = null, ?OrderLock $order_lock = null ) {
 		$this->verifier = $verifier ?? new WebhookSignatureVerifier();
+		if ( null === $reconciler ) {
+			$adapter    = new SquareTerminalAdapter( ( new SquareClientFactory() )->create() );
+			$reconciler = new CheckoutReconciler( $adapter );
+		}
+		$this->reconciler = $reconciler;
+		$this->order_lock = $order_lock ?? new OrderLock();
 	}
 
 	/**
@@ -43,7 +59,7 @@ final class WebhookHandler {
 		if ( ! $this->verifier->verify( $body, $signature, Settings::get_webhook_signature_key(), Settings::get_webhook_notification_url() ) ) {
 			return array(
 				'status' => 401,
-				'error'  => 'Invalid signature.',
+				'error'  => __( 'Invalid signature.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -51,7 +67,7 @@ final class WebhookHandler {
 		if ( ! is_array( $event ) ) {
 			return array(
 				'status' => 400,
-				'error'  => 'Invalid JSON.',
+				'error'  => __( 'Invalid JSON.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -67,53 +83,83 @@ final class WebhookHandler {
 		if ( ! preg_match( '/^woocommerce_order_(\d+)$/', $reference, $matches ) ) {
 			return array(
 				'status' => 400,
-				'error'  => 'Invalid reference_id.',
+				'error'  => __( 'Invalid reference_id.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
-		$order = wc_get_order( (int) $matches[1] );
+		$order_id = (int) $matches[1];
+		$order    = wc_get_order( $order_id );
 		if ( ! $order ) {
 			return array(
 				'status' => 404,
-				'error'  => 'Order not found.',
+				'error'  => __( 'Order not found.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
-		$event_id  = (string) ( $event['event_id'] ?? '' );
-		$processed = $order->get_meta( '_sqtwc_processed_event_ids', true );
-		$processed = is_array( $processed ) ? $processed : array();
+		$event_id = (string) ( $event['event_id'] ?? '' );
+		try {
+			return $this->order_lock->with_lock(
+				$order_id,
+				function () use ( $order_id, $event_id, $checkout ): array {
+					$order = wc_get_order( $order_id );
+					if ( ! $order ) {
+						return array(
+							'status' => 404,
+							'error'  => __( 'Order not found.', 'square-terminal-for-woocommerce' ),
+						);
+					}
 
-		if ( $event_id && in_array( $event_id, $processed, true ) ) {
+					$processed = $order->get_meta( '_sqtwc_processed_event_ids', true );
+					$processed = is_array( $processed ) ? $processed : array();
+					if ( $event_id && in_array( $event_id, $processed, true ) ) {
+						return array(
+							'status' => 200,
+							'result' => 'duplicate',
+						);
+					}
+
+					if ( $event_id ) {
+						OrderMeta::append_processed_event_id( $order, $event_id );
+					}
+
+					try {
+						$result = $this->reconciler->reconcile( $checkout, $order );
+					} catch ( Throwable $exception ) {
+						$order->update_meta_data( '_sqtwc_processed_event_ids', $processed );
+						$order->save();
+
+						throw $exception;
+					}
+
+					$order->save();
+
+					if ( empty( $result['applied'] ) ) {
+						return array(
+							'status' => 202,
+							'result' => 'ignored',
+						);
+					}
+
+					return array(
+						'status' => 200,
+						'result' => 'processed',
+					);
+				}
+			);
+		} catch ( Throwable $exception ) {
+			Logger::error(
+				'Terminal checkout webhook reconciliation failed',
+				array(
+					'event_id'        => $event_id,
+					'exception_class' => get_class( $exception ),
+					'detail'          => $exception->getMessage(),
+				)
+			);
+
 			return array(
-				'status' => 200,
-				'result' => 'duplicate',
+				'status' => 500,
+				'error'  => __( 'Terminal checkout reconciliation failed.', 'square-terminal-for-woocommerce' ),
 			);
 		}
-
-		if ( $event_id ) {
-			$processed[] = $event_id;
-			$order->update_meta_data( '_sqtwc_processed_event_ids', $processed );
-		}
-
-		if ( 'COMPLETED' === ( $checkout['status'] ?? '' ) ) {
-			$payment_ids = (array) ( $checkout['payment_ids'] ?? array() );
-			$order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
-			$order->update_meta_data( '_sqtwc_checkout_idempotency_key', '' );
-
-			if ( ! $order->is_paid() ) {
-				$transaction_id = (string) ( $payment_ids[0] ?? '' );
-				$order->set_transaction_id( $transaction_id );
-				$order->payment_complete( $transaction_id );
-			}
-
-			Logger::info( 'Verified Square webhook completed Terminal checkout', array( 'event_id' => $event_id ), $order );
-		}
-
-		$order->save();
-
-		return array(
-			'status' => 200,
-			'result' => 'processed',
-		);
 	}
 }

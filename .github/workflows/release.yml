@@ -23,6 +23,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -31,13 +35,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Read plugin version
         id: version
         run: |
+          set -euo pipefail
+
           VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.\-]*' square-terminal-for-woocommerce.php | head -n1)
           if [ -z "$VERSION" ]; then
             echo "Could not determine plugin version from header" >&2
@@ -46,23 +52,40 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Plugin version: $VERSION"
 
-      - name: Check whether release already exists
+      - name: Check whether release is needed
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! gh release view "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+          ASSET="square-terminal-for-woocommerce.zip"
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            MODE=create
+            echo "Release $TAG does not exist; creating it."
           elif [ "${{ inputs.force }}" = "true" ]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Release v${{ steps.version.outputs.version }} exists; force re-release requested."
+            MODE=replace
+            echo "Release $TAG exists; force re-release requested."
+          elif ! gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$ASSET"; then
+            MODE=repair
+            echo "Release $TAG exists without $ASSET; rebuilding and uploading it."
           else
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release v${{ steps.version.outputs.version }} already exists; skipping."
+            MODE=skip
+            echo "Release $TAG already has $ASSET; skipping."
+          fi
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = "skip" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up PHP
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.release == 'true'
         uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc
         with:
           # Build with 8.2: PHP-Scoper requires ^8.2. Runtime deps are still
@@ -73,16 +96,18 @@ jobs:
           tools: composer
 
       - name: Install runtime dependencies
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.release == 'true'
         run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
 
       - name: Build scoped vendor
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.release == 'true'
         run: composer run-script build:scoped-vendor
 
       - name: Package distributable zip
-        if: steps.check.outputs.exists == 'false'
+        if: steps.check.outputs.release == 'true'
         run: |
+          set -euo pipefail
+
           PLUGIN=square-terminal-for-woocommerce
           STAGE="$RUNNER_TEMP/$PLUGIN"
           rm -rf "$STAGE"
@@ -103,16 +128,46 @@ jobs:
           fi
           echo "Packaged $(du -h "$PLUGIN.zip" | cut -f1) archive"
 
-      - name: Create GitHub Release
-        if: steps.check.outputs.exists == 'false'
+      - name: Publish GitHub Release
+        if: steps.check.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ inputs.force }}" = "true" ]; then
-            gh release delete "v${{ steps.version.outputs.version }}" --yes --cleanup-tag || true
+          set -euo pipefail
+
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v$VERSION"
+          ZIP="./square-terminal-for-woocommerce.zip"
+          NOTES_FILE="docs/releases/$VERSION.md"
+          CREATE_NOTES_ARGS=(--generate-notes)
+          EDIT_NOTES_ARGS=(--notes "Release $TAG")
+          if [ -f "$NOTES_FILE" ]; then
+            CREATE_NOTES_ARGS=(--notes-file "$NOTES_FILE")
+            EDIT_NOTES_ARGS=(--notes-file "$NOTES_FILE")
           fi
-          gh release create "v${{ steps.version.outputs.version }}" \
-            ./square-terminal-for-woocommerce.zip \
-            --target "$GITHUB_SHA" \
-            --title "v${{ steps.version.outputs.version }}" \
-            --generate-notes
+
+          case "${{ steps.check.outputs.mode }}" in
+            replace)
+              gh release delete "$TAG" --yes --cleanup-tag
+              gh release create "$TAG" "$ZIP" \
+                --target "$GITHUB_SHA" \
+                --title "$TAG" \
+                "${CREATE_NOTES_ARGS[@]}"
+              ;;
+            repair)
+              gh release upload "$TAG" "$ZIP" --clobber
+              gh release edit "$TAG" \
+                --title "$TAG" \
+                "${EDIT_NOTES_ARGS[@]}"
+              ;;
+            create)
+              gh release create "$TAG" "$ZIP" \
+                --target "$GITHUB_SHA" \
+                --title "$TAG" \
+                "${CREATE_NOTES_ARGS[@]}"
+              ;;
+            *)
+              echo "Unexpected release mode: ${{ steps.check.outputs.mode }}" >&2
+              exit 1
+              ;;
+          esac

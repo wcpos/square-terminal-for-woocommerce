@@ -44,4 +44,19 @@ final class CurrencyConverter {
 
 		return (int) round( ( (float) $amount ) * $factor );
 	}
+
+	/**
+	 * Format a minor-unit amount as a human-readable decimal with currency code.
+	 *
+	 * @param int    $amount   Amount in minor units.
+	 * @param string $currency ISO currency code.
+	 */
+	public static function format_minor_units( int $amount, string $currency ): string {
+		$currency = strtoupper( $currency );
+		if ( in_array( $currency, self::ZERO_DECIMAL, true ) ) {
+			return sprintf( '%d %s', $amount, $currency );
+		}
+
+		return sprintf( '%s %s', number_format( $amount / 100, 2, '.', '' ), $currency );
+	}
 }

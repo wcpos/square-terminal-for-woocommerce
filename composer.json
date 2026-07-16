@@ -21,6 +21,7 @@
     "lint": "phpcs --standard=./.phpcs.xml.dist",
     "lint-report": "phpcs --standard=./.phpcs.xml.dist --report=checkstyle",
     "test": "phpunit --configuration phpunit.xml.dist",
+    "test:js": "node --test tests/js/*.test.js",
     "build:scoped-vendor": [
       "test -f tools/php-scoper.phar || (mkdir -p tools && curl -L https://github.com/humbug/php-scoper/releases/download/0.18.19/php-scoper.phar -o tools/php-scoper.phar)",
       "rm -rf build/scoped vendor_scoped",
