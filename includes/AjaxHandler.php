@@ -120,9 +120,11 @@ final class AjaxHandler {
 				$mapped = $this->error_mapper->map( $exception );
 				Logger::error( 'Square Terminal checkout creation failed', $mapped['log_context'] );
 				if ( ! $mapped['retriable'] || 1 === $attempt ) {
-					OrderMeta::close_current_attempt( $order, 'FAILED' );
 					OrderMeta::append_log( $order, 'error', $mapped['cashier_message'] );
 					if ( ! $mapped['retriable'] ) {
+						// Terminal failure: close the attempt so a fresh create is allowed.
+						// Retriable exhaustion keeps the attempt so a later retry resumes
+						// with the same idempotency key (Square may have created the checkout).
 						OrderMeta::close_current_attempt( $order, 'failed' );
 					}
 					$order->save();
@@ -133,7 +135,7 @@ final class AjaxHandler {
 		}
 
 		if ( ! is_array( $result ) || empty( $result['id'] ) ) {
-			OrderMeta::close_current_attempt( $order, 'FAILED' );
+			OrderMeta::close_current_attempt( $order, 'failed' );
 			$order->save();
 
 			return $this->error_response( 502, __( 'Square did not return a Terminal checkout ID.', 'square-terminal-for-woocommerce' ) );

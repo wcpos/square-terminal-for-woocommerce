@@ -145,7 +145,7 @@ final class CheckoutReconcilerTest extends TestCase {
 		self::assertFalse( $order->paid );
 		self::assertSame( 0, $order->payment_complete_calls );
 		self::assertSame( 'on-hold', $order->status );
-		self::assertStringContainsString( 'less than', $order->notes[0] );
+		self::assertStringContainsString( 'Verify the payment in Square Dashboard', $order->notes[0] );
 	}
 
 	public function test_abandoned_checkout_can_complete_after_current_attempt_changes(): void {
