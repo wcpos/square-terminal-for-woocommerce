@@ -9,12 +9,14 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use RuntimeException;
 use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 
 /**
  * Serializes payment lifecycle mutations for a WooCommerce order.
  *
- * MySQL GET_LOCK provides the real mutual-exclusion guarantee. The option
- * driver is a best-effort fallback for non-MySQL environments.
+ * The option driver is best-effort: a lease older than 300 seconds may be
+ * taken over while the previous holder is still running. MySQL GET_LOCK is
+ * the real mutual-exclusion guarantee.
  */
 final class OrderLock {
 	/**
@@ -55,6 +57,14 @@ final class OrderLock {
 			if ( ! add_option( $option_name, $lock_value, '', 'no' ) ) {
 				return false;
 			}
+
+			Logger::warning(
+				'Square Terminal option lock stale lease taken over',
+				array(
+					'order_id'          => $order_id,
+					'lease_age_seconds' => time() - $created,
+				)
+			);
 		}
 
 		$this->held[ $order_id ] = array(

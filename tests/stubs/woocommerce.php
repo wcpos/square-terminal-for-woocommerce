@@ -27,4 +27,4 @@ class SQTWC_Test_Order {
 }
 if ( ! function_exists( 'wc_get_order' ) ) { function wc_get_order( $id ) { return $GLOBALS['sqtwc_orders'][$id] ?? null; } }
 if ( ! function_exists( 'wc_get_orders' ) ) { function wc_get_orders( $args = array() ) { $GLOBALS['sqtwc_wc_get_orders_args'][] = $args; if ( isset( $GLOBALS['sqtwc_wc_get_orders_callback'] ) ) { return $GLOBALS['sqtwc_wc_get_orders_callback']( $args ); } return $GLOBALS['sqtwc_order_query_results'] ?? array(); } }
-if ( ! function_exists( 'wc_get_logger' ) ) { function wc_get_logger() { return new class { public array $logs = array(); public function info($m,$c=array()){$this->logs[]=array('info',$m,$c);} public function error($m,$c=array()){$this->logs[]=array('error',$m,$c);} }; } }
+if ( ! function_exists( 'wc_get_logger' ) ) { function wc_get_logger() { return new class { public function info($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('info',$m,$c);} public function warning($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('warning',$m,$c);} public function error($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('error',$m,$c);} }; } }

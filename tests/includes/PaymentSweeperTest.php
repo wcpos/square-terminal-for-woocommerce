@@ -42,6 +42,32 @@ final class SweeperReconciler {
 	}
 }
 
+final class SweeperWpdb {
+	public string $options = 'wp_options';
+	public string $discovery_query = '';
+
+	/** @var array<int,object> */
+	public array $discovery_results = array();
+
+	public function get_results( string $query ): array {
+		$this->discovery_query = $query;
+
+		return $this->discovery_results;
+	}
+
+	public function prepare( string $query, ...$args ): string {
+		unset( $args );
+
+		return $query;
+	}
+
+	public function get_var( string $query ): string {
+		unset( $query );
+
+		return '1';
+	}
+}
+
 final class PaymentSweeperTest extends TestCase {
 	protected function setUp(): void {
 		unset( $GLOBALS['wpdb'] );
@@ -52,7 +78,7 @@ final class PaymentSweeperTest extends TestCase {
 		$GLOBALS['sqtwc_orders']             = array();
 		$GLOBALS['sqtwc_order_query_results'] = array();
 		$GLOBALS['sqtwc_wc_get_orders_args'] = array();
-		$GLOBALS['sqtwc_options']            = array();
+		$GLOBALS['sqtwc_options']            = array( 'sqtwc_reconcile_seeded' => '18446744073709551615' );
 		unset( $GLOBALS['sqtwc_wc_get_orders_callback'] );
 	}
 
@@ -77,7 +103,7 @@ final class PaymentSweeperTest extends TestCase {
 		$order->update_meta_data( '_sqtwc_attempt_started', time() - 601 );
 		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_done', 'chk_open' ) );
 		$GLOBALS['sqtwc_orders'][99] = $order;
-		$GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] = array( 99 => time() - 700 );
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] = (string) ( time() - 700 );
 		$adapter = new SweeperAdapter();
 		$adapter->checkouts = array(
 			'chk_current' => array( 'status' => 'IN_PROGRESS' ),
@@ -92,7 +118,7 @@ final class PaymentSweeperTest extends TestCase {
 		self::assertSame( array( array( 99, 'chk_current' ), array( 99, 'chk_done' ), array( 99, 'chk_open' ) ), $reconciler->calls );
 		self::assertSame( array( 'chk_open' ), $order->get_meta( '_sqtwc_abandoned_checkout_ids' ) );
 		self::assertSame( array(), $GLOBALS['sqtwc_wc_get_orders_args'] );
-		self::assertArrayHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_sweep_continues_after_a_throwing_order(): void {
@@ -101,7 +127,8 @@ final class PaymentSweeperTest extends TestCase {
 		$second = new \SQTWC_Test_Order( 99 );
 		$second->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_ok' ) );
 		$GLOBALS['sqtwc_orders'] = array( 98 => $first, 99 => $second );
-		$GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] = array( 98 => 10, 99 => 20 );
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_98'] = '10';
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] = '20';
 		$adapter = new SweeperAdapter();
 		$adapter->checkouts['chk_throw'] = new \RuntimeException( 'Square outage' );
 		$adapter->checkouts['chk_ok'] = array( 'status' => 'CANCELED' );
@@ -112,19 +139,17 @@ final class PaymentSweeperTest extends TestCase {
 		self::assertSame( array( 'chk_throw', 'chk_ok' ), $adapter->calls );
 		self::assertSame( array( array( 99, 'chk_ok' ) ), $reconciler->calls );
 		self::assertArrayNotHasKey( '_sqtwc_abandoned_checkout_ids', $second->meta );
-		self::assertArrayHasKey( 98, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
-		self::assertArrayNotHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayHasKey( 'sqtwc_reconcile_98', $GLOBALS['sqtwc_options'] );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_sweep_processes_only_the_oldest_twenty_five_indexed_orders(): void {
-		$index = array();
-		for ( $order_id = 1; $order_id <= 30; ++$order_id ) {
+		for ( $order_id = 30; $order_id >= 1; --$order_id ) {
 			$order = new \SQTWC_Test_Order( $order_id );
 			$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_' . $order_id ) );
 			$GLOBALS['sqtwc_orders'][ $order_id ] = $order;
-			$index[ $order_id ] = 1000 + $order_id;
+			$GLOBALS['sqtwc_options'][ 'sqtwc_reconcile_' . $order_id ] = (string) ( 1000 + $order_id );
 		}
-		$GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] = array_reverse( $index, true );
 		$adapter = new SweeperAdapter();
 
 		( new PaymentSweeper( $adapter, new SweeperReconciler(), new OrderLock() ) )->sweep();
@@ -142,7 +167,7 @@ final class PaymentSweeperTest extends TestCase {
 		$order->update_meta_data( '_sqtwc_attempt_started', time() - 601 );
 		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_abandoned' ) );
 		$GLOBALS['sqtwc_orders'][99] = $order;
-		$GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] = array( 99 => time() - 700 );
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] = (string) ( time() - 700 );
 		$adapter = new SweeperAdapter();
 		$adapter->checkouts = array(
 			'chk_current'   => array( 'status' => 'COMPLETED' ),
@@ -151,11 +176,12 @@ final class PaymentSweeperTest extends TestCase {
 
 		( new PaymentSweeper( $adapter, new SweeperReconciler(), new OrderLock() ) )->sweep();
 
-		self::assertArrayNotHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 		self::assertArrayNotHasKey( '_sqtwc_abandoned_checkout_ids', $order->meta );
 	}
 
 	public function test_missing_index_uses_legacy_meta_query_once_to_seed_it(): void {
+		$GLOBALS['sqtwc_options'] = array();
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_open' ) );
 		$GLOBALS['sqtwc_orders'][99] = $order;
@@ -168,6 +194,41 @@ final class PaymentSweeperTest extends TestCase {
 		self::assertCount( 1, $GLOBALS['sqtwc_wc_get_orders_args'] );
 		self::assertSame( -1, $GLOBALS['sqtwc_wc_get_orders_args'][0]['limit'] );
 		self::assertArrayHasKey( 'meta_query', $GLOBALS['sqtwc_wc_get_orders_args'][0] );
-		self::assertArrayHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayHasKey( 'sqtwc_reconcile_seeded', $GLOBALS['sqtwc_options'] );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
+	}
+
+	public function test_index_order_preserves_the_oldest_work_timestamp_and_unindex_deletes_the_order_option(): void {
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] = '123';
+
+		OrderMeta::index_order( 99 );
+
+		self::assertSame( '123', $GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] );
+
+		OrderMeta::unindex_order( 99 );
+
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
+	}
+
+	public function test_sweep_discovers_per_order_options_from_wpdb_in_timestamp_order(): void {
+		$first = new \SQTWC_Test_Order( 98 );
+		$first->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_first' ) );
+		$second = new \SQTWC_Test_Order( 99 );
+		$second->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_second' ) );
+		$GLOBALS['sqtwc_orders'] = array( 98 => $first, 99 => $second );
+
+		$wpdb = new SweeperWpdb();
+		$wpdb->discovery_results = array(
+			(object) array( 'option_name' => 'sqtwc_reconcile_98', 'option_value' => '10' ),
+			(object) array( 'option_name' => 'sqtwc_reconcile_99', 'option_value' => '20' ),
+		);
+		$GLOBALS['wpdb'] = $wpdb;
+		$adapter = new SweeperAdapter();
+
+		( new PaymentSweeper( $adapter, new SweeperReconciler(), new OrderLock() ) )->sweep();
+
+		self::assertSame( array( 'chk_first', 'chk_second' ), $adapter->calls );
+		self::assertStringContainsString( "FROM wp_options WHERE option_name LIKE 'sqtwc\\_reconcile\\_%'", $wpdb->discovery_query );
+		self::assertStringContainsString( 'ORDER BY CAST(option_value AS UNSIGNED) ASC LIMIT 25', $wpdb->discovery_query );
 	}
 }

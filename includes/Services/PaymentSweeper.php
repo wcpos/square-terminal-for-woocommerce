@@ -16,6 +16,8 @@ use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 final class PaymentSweeper {
 	public const EVENT = 'sqtwc_sweep_payments';
 	public const SCHEDULE = 'sqtwc_ten_minutes';
+	private const RECONCILIATION_SEEDED_OPTION = 'sqtwc_reconcile_seeded';
+	private const RECONCILIATION_SEEDED_VALUE = '18446744073709551615';
 
 	/** @var object|null */
 	private $terminal_adapter;
@@ -85,14 +87,9 @@ final class PaymentSweeper {
 	 * Reconcile up to 25 orders with stale active or detached checkouts.
 	 */
 	public function sweep(): void {
-		$index = get_option( OrderMeta::RECONCILIATION_INDEX_OPTION, null );
-		if ( null === $index ) {
-			$index = $this->seed_legacy_index();
-		}
-		$index = $this->normalize_index( $index );
-		asort( $index, SORT_NUMERIC );
+		$this->seed_legacy_index();
 
-		foreach ( array_slice( array_keys( $index ), 0, 25 ) as $order_id ) {
+		foreach ( $this->pending_order_ids() as $order_id ) {
 
 			try {
 				$this->order_lock->with_lock(
@@ -107,10 +104,13 @@ final class PaymentSweeper {
 
 	/**
 	 * Seed the explicit index once from legacy lifecycle metadata.
-	 *
-	 * @return array<int,int>
 	 */
-	private function seed_legacy_index(): array {
+	private function seed_legacy_index(): void {
+		// Sort the non-order marker after all timestamped work matched by the prefix query.
+		if ( ! add_option( self::RECONCILIATION_SEEDED_OPTION, self::RECONCILIATION_SEEDED_VALUE, '', 'no' ) ) {
+			return;
+		}
+
 		$orders = wc_get_orders(
 			array(
 				'limit'      => -1,
@@ -139,45 +139,62 @@ final class PaymentSweeper {
 				),
 			)
 		);
-		$index  = array();
-		$now    = time();
 		foreach ( $orders as $candidate ) {
 			$order_id = is_object( $candidate ) && method_exists( $candidate, 'get_id' ) ? (int) $candidate->get_id() : absint( $candidate );
 			if ( $order_id <= 0 ) {
 				continue;
 			}
 
-			$started            = is_object( $candidate ) && method_exists( $candidate, 'get_meta' ) ? (int) $candidate->get_meta( '_sqtwc_attempt_started', true ) : 0;
-			$index[ $order_id ] = $started > 0 ? $started : $now;
+			OrderMeta::index_order( $order_id );
 		}
-		update_option( OrderMeta::RECONCILIATION_INDEX_OPTION, $index );
-
-		return $index;
 	}
 
 	/**
-	 * Normalize persisted index keys and timestamps.
+	 * Discover the oldest per-order reconciliation options in a bounded batch.
 	 *
-	 * @param mixed $index Persisted option value.
 	 * @return array<int,int>
 	 */
-	private function normalize_index( $index ): array {
-		if ( ! is_array( $index ) ) {
-			return array();
+	private function pending_order_ids(): array {
+		global $wpdb;
+
+		if ( is_object( $wpdb ) && isset( $wpdb->options ) && method_exists( $wpdb, 'get_results' ) ) {
+			$rows = $wpdb->get_results( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Bounded option-prefix discovery is the reconciliation queue.
+				"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'sqtwc\\_reconcile\\_%' ORDER BY CAST(option_value AS UNSIGNED) ASC LIMIT 25"
+			);
+		} else {
+			$options = isset( $GLOBALS['sqtwc_options'] ) && is_array( $GLOBALS['sqtwc_options'] ) ? $GLOBALS['sqtwc_options'] : array();
+			$rows    = array();
+			foreach ( $options as $option_name => $option_value ) {
+				if ( str_starts_with( (string) $option_name, OrderMeta::RECONCILIATION_OPTION_PREFIX ) ) {
+					$rows[] = (object) array(
+						'option_name'  => $option_name,
+						'option_value' => $option_value,
+					);
+				}
+			}
+
+			usort(
+				$rows,
+				static fn( object $first, object $second ): int => (int) $first->option_value <=> (int) $second->option_value
+			);
+			$rows = array_slice( $rows, 0, 25 );
 		}
 
-		$normalized = array();
-		foreach ( $index as $order_id => $timestamp ) {
-			$order_id = absint( $order_id );
-			if ( $order_id <= 0 ) {
+		$order_ids     = array();
+		$option_prefix = preg_quote( OrderMeta::RECONCILIATION_OPTION_PREFIX, '/' );
+		foreach ( (array) $rows as $row ) {
+			$option_name = is_object( $row ) && isset( $row->option_name ) ? (string) $row->option_name : ( is_array( $row ) ? (string) ( $row['option_name'] ?? '' ) : '' );
+			if ( 1 !== preg_match( '/^' . $option_prefix . '([0-9]+)$/', $option_name, $matches ) ) {
 				continue;
 			}
 
-			$timestamp = (int) $timestamp;
-			$normalized[ $order_id ] = $timestamp > 0 ? $timestamp : time();
+			$order_id = absint( $matches[1] );
+			if ( $order_id > 0 ) {
+				$order_ids[] = $order_id;
+			}
 		}
 
-		return $normalized;
+		return $order_ids;
 	}
 
 	/**

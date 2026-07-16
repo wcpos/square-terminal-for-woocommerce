@@ -194,7 +194,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 'chk_created', $order->get_meta( '_sqtwc_checkout_id' ) );
 		self::assertSame( 'device_a', $order->get_meta( '_sqtwc_device_id' ) );
 		self::assertSame( 'PENDING', $order->get_meta( '_sqtwc_checkout_status' ) );
-		self::assertArrayHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_create_maps_non_retriable_provider_error_without_exposing_detail(): void {
@@ -252,7 +252,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
 		self::assertArrayNotHasKey( '_sqtwc_attempt_request', $order->meta );
 		self::assertSame( 'failed', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
-		self::assertArrayNotHasKey( 99, $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 
 		$created = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
 
@@ -469,7 +469,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_id' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
-		self::assertArrayHasKey( 99, (array) ( $GLOBALS['sqtwc_options']['sqtwc_pending_reconciliation'] ?? array() ) );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_detach_rejects_stale_register_identity(): void {

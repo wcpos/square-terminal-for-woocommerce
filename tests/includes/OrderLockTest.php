@@ -8,6 +8,7 @@ final class OrderLockTest extends TestCase {
 	protected function setUp(): void {
 		unset( $GLOBALS['wpdb'] );
 		$GLOBALS['sqtwc_options'] = array();
+		$GLOBALS['sqtwc_logs']    = array();
 	}
 
 	public function test_add_option_fallback_rejects_a_held_lock(): void {
@@ -23,12 +24,18 @@ final class OrderLockTest extends TestCase {
 	}
 
 	public function test_add_option_fallback_takes_over_a_lock_stale_for_more_than_300_seconds(): void {
-		$GLOBALS['sqtwc_options']['sqtwc_lock_99'] = 'old-owner|' . ( time() - 301 );
+		$created = time() - 301;
+		$GLOBALS['sqtwc_options']['sqtwc_lock_99'] = 'old-owner|' . $created;
 		$lock = new OrderLock();
 
 		self::assertTrue( $lock->acquire( 99 ) );
 		self::assertMatchesRegularExpression( '/^[^|]+\\|[0-9]+$/', $GLOBALS['sqtwc_options']['sqtwc_lock_99'] );
-		self::assertNotSame( 'old-owner|' . ( time() - 301 ), $GLOBALS['sqtwc_options']['sqtwc_lock_99'] );
+		self::assertNotSame( 'old-owner|' . $created, $GLOBALS['sqtwc_options']['sqtwc_lock_99'] );
+		self::assertCount( 1, $GLOBALS['sqtwc_logs'] );
+		self::assertSame( 'warning', $GLOBALS['sqtwc_logs'][0][0] );
+		self::assertSame( 'Square Terminal option lock stale lease taken over', $GLOBALS['sqtwc_logs'][0][1] );
+		self::assertSame( 99, $GLOBALS['sqtwc_logs'][0][2]['order_id'] );
+		self::assertGreaterThanOrEqual( 301, $GLOBALS['sqtwc_logs'][0][2]['lease_age_seconds'] );
 
 		$lock->release( 99 );
 		self::assertArrayNotHasKey( 'sqtwc_lock_99', $GLOBALS['sqtwc_options'] );

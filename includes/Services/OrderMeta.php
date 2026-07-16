@@ -11,7 +11,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
  * Centralizes bounded logs and attempt lifecycle metadata.
  */
 final class OrderMeta {
-	public const RECONCILIATION_INDEX_OPTION = 'sqtwc_pending_reconciliation';
+	public const RECONCILIATION_OPTION_PREFIX = 'sqtwc_reconcile_';
 
 	/**
 	 * Append a structured cashier log entry, retaining the newest 100 entries.
@@ -116,12 +116,7 @@ final class OrderMeta {
 			return;
 		}
 
-		$index = get_option( self::RECONCILIATION_INDEX_OPTION, array() );
-		$index = is_array( $index ) ? $index : array();
-		if ( ! isset( $index[ $order_id ] ) || (int) $index[ $order_id ] <= 0 ) {
-			$index[ $order_id ] = time();
-		}
-		update_option( self::RECONCILIATION_INDEX_OPTION, $index );
+		add_option( self::RECONCILIATION_OPTION_PREFIX . $order_id, (string) time(), '', 'no' );
 	}
 
 	/**
@@ -129,13 +124,11 @@ final class OrderMeta {
 	 */
 	public static function unindex_order( int $order_id ): void {
 		$order_id = absint( $order_id );
-		$index    = get_option( self::RECONCILIATION_INDEX_OPTION, null );
-		if ( $order_id <= 0 || ! is_array( $index ) || ! array_key_exists( $order_id, $index ) ) {
+		if ( $order_id <= 0 ) {
 			return;
 		}
 
-		unset( $index[ $order_id ] );
-		update_option( self::RECONCILIATION_INDEX_OPTION, $index );
+		delete_option( self::RECONCILIATION_OPTION_PREFIX . $order_id );
 	}
 
 	/**
