@@ -25,7 +25,7 @@ final class SquareErrorMapper {
 		$code       = $normalized['code'];
 
 		if ( 'IDEMPOTENCY_KEY_REUSED' === $code ) {
-			return $this->result( false, __( 'The previous payment request may already be active. Check the terminal or release the payment.', 'square-terminal-for-woocommerce' ), $normalized, 409 );
+			return $this->result( false, __( 'The previous payment request may still be active on the terminal. Check the terminal, then use Check Status or release the payment.', 'square-terminal-for-woocommerce' ), $normalized, 409 );
 		}
 
 		if ( 'AUTHENTICATION_ERROR' === $category ) {

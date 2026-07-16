@@ -16,6 +16,8 @@ use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 final class PaymentSweeper {
 	public const EVENT = 'sqtwc_sweep_payments';
 	public const SCHEDULE = 'sqtwc_ten_minutes';
+	private const RECONCILIATION_SEEDED_OPTION = 'sqtwc_reconcile_seeded';
+	private const RECONCILIATION_SEEDED_VALUE = '18446744073709551615';
 
 	/** @var object|null */
 	private $terminal_adapter;
@@ -85,11 +87,34 @@ final class PaymentSweeper {
 	 * Reconcile up to 25 orders with stale active or detached checkouts.
 	 */
 	public function sweep(): void {
+		$this->seed_legacy_index();
+
+		foreach ( $this->pending_order_ids() as $order_id ) {
+
+			try {
+				$this->order_lock->with_lock(
+					(int) $order_id,
+					fn() => $this->sweep_order( $order_id )
+				);
+			} catch ( Throwable $exception ) {
+				$this->log_error( (int) $order_id, '', $exception );
+			}
+		}
+	}
+
+	/**
+	 * Seed the explicit index once from legacy lifecycle metadata.
+	 */
+	private function seed_legacy_index(): void {
+		if ( self::RECONCILIATION_SEEDED_VALUE === (string) get_option( self::RECONCILIATION_SEEDED_OPTION, '' ) ) {
+			return;
+		}
+
 		$orders = wc_get_orders(
 			array(
-				'limit'      => 25,
+				'limit'      => -1,
 				'return'     => 'objects',
-				'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- The bounded reconciliation sweep is explicitly keyed by lifecycle meta.
+				'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- One-time lazy migration from the legacy reconciliation discovery path.
 					'relation' => 'OR',
 					array(
 						'relation' => 'AND',
@@ -113,22 +138,68 @@ final class PaymentSweeper {
 				),
 			)
 		);
-
 		foreach ( $orders as $candidate ) {
 			$order_id = is_object( $candidate ) && method_exists( $candidate, 'get_id' ) ? (int) $candidate->get_id() : absint( $candidate );
 			if ( $order_id <= 0 ) {
 				continue;
 			}
 
-			try {
-				$this->order_lock->with_lock(
-					$order_id,
-					fn() => $this->sweep_order( $order_id )
-				);
-			} catch ( Throwable $exception ) {
-				$this->log_error( $order_id, '', $exception );
+			OrderMeta::index_order( $order_id );
+		}
+
+		// Mark completion only after every candidate is indexed: an interrupted
+		// seed retries on the next sweep (index_order is idempotent, so a
+		// concurrent double-seed is harmless). The marker value sorts after all
+		// timestamped work matched by the prefix discovery query.
+		update_option( self::RECONCILIATION_SEEDED_OPTION, self::RECONCILIATION_SEEDED_VALUE, false );
+	}
+
+	/**
+	 * Discover the oldest per-order reconciliation options in a bounded batch.
+	 *
+	 * @return array<int,int>
+	 */
+	private function pending_order_ids(): array {
+		global $wpdb;
+
+		if ( is_object( $wpdb ) && isset( $wpdb->options ) && method_exists( $wpdb, 'get_results' ) ) {
+			$rows = $wpdb->get_results( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- Bounded option-prefix discovery is the reconciliation queue.
+				"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'sqtwc\\_reconcile\\_%' ORDER BY CAST(option_value AS UNSIGNED) ASC LIMIT 25"
+			);
+		} else {
+			$options = isset( $GLOBALS['sqtwc_options'] ) && is_array( $GLOBALS['sqtwc_options'] ) ? $GLOBALS['sqtwc_options'] : array();
+			$rows    = array();
+			foreach ( $options as $option_name => $option_value ) {
+				if ( str_starts_with( (string) $option_name, OrderMeta::RECONCILIATION_OPTION_PREFIX ) ) {
+					$rows[] = (object) array(
+						'option_name'  => $option_name,
+						'option_value' => $option_value,
+					);
+				}
+			}
+
+			usort(
+				$rows,
+				static fn( object $first, object $second ): int => (int) $first->option_value <=> (int) $second->option_value
+			);
+			$rows = array_slice( $rows, 0, 25 );
+		}
+
+		$order_ids     = array();
+		$option_prefix = preg_quote( OrderMeta::RECONCILIATION_OPTION_PREFIX, '/' );
+		foreach ( (array) $rows as $row ) {
+			$option_name = is_object( $row ) && isset( $row->option_name ) ? (string) $row->option_name : ( is_array( $row ) ? (string) ( $row['option_name'] ?? '' ) : '' );
+			if ( 1 !== preg_match( '/^' . $option_prefix . '([0-9]+)$/', $option_name, $matches ) ) {
+				continue;
+			}
+
+			$order_id = absint( $matches[1] );
+			if ( $order_id > 0 ) {
+				$order_ids[] = $order_id;
 			}
 		}
+
+		return $order_ids;
 	}
 
 	/**
@@ -137,6 +208,8 @@ final class PaymentSweeper {
 	private function sweep_order( int $order_id ): void {
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) {
+			OrderMeta::unindex_order( $order_id );
+
 			return;
 		}
 
@@ -169,6 +242,14 @@ final class PaymentSweeper {
 			} catch ( Throwable $exception ) {
 				$this->log_error( $order_id, $checkout_id, $exception );
 			}
+		}
+
+		$abandoned = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
+		$abandoned = is_array( $abandoned ) ? array_filter( $abandoned ) : array();
+		if ( '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) || ! empty( $abandoned ) ) {
+			OrderMeta::index_order( $order_id );
+		} else {
+			OrderMeta::unindex_order( $order_id );
 		}
 	}
 
@@ -203,7 +284,12 @@ final class PaymentSweeper {
 	private function remove_abandoned_checkout( $order, string $checkout_id ): void {
 		$ids = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
 		$ids = is_array( $ids ) ? $ids : array();
-		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array_values( array_diff( $ids, array( $checkout_id ) ) ) );
+		$ids = array_values( array_diff( $ids, array( $checkout_id ) ) );
+		if ( empty( $ids ) ) {
+			$order->delete_meta_data( '_sqtwc_abandoned_checkout_ids' );
+		} else {
+			$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $ids );
+		}
 	}
 
 	/**

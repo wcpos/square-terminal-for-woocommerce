@@ -76,6 +76,22 @@ final class Logger {
 	}
 
 	/**
+	 * Write a warning-level log entry.
+	 *
+	 * @param string              $message Log message.
+	 * @param array<string,mixed> $context Additional context.
+	 */
+	public static function warning( string $message, array $context = array() ): void {
+		wc_get_logger()->warning(
+			$message,
+			array_merge(
+				array( 'source' => 'square-terminal-for-woocommerce' ),
+				self::sanitize_context( $context )
+			)
+		);
+	}
+
+	/**
 	 * Write an error-level log entry.
 	 *
 	 * @param string              $message Log message.

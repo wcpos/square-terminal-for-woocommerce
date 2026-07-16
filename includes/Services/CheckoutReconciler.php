@@ -93,6 +93,7 @@ final class CheckoutReconciler {
 		$message = self::cashier_message( $status );
 		OrderMeta::append_log( $order, 'info', $message );
 		$order->save();
+		OrderMeta::index_order( (int) $order->get_id() );
 		Logger::info( 'Terminal checkout state reconciled', $this->log_context( $checkout, $order ) );
 
 		return array(
@@ -128,20 +129,31 @@ final class CheckoutReconciler {
 	 * @return array<string,mixed>
 	 */
 	private function complete( array $checkout, $order, array $payments, bool $is_abandoned ): array {
-		$payment_ids = array();
-		$collected   = 0;
-		$tip         = 0;
-
-		foreach ( $payments as $payment ) {
-			$payment_ids[] = (string) $payment['id'];
-			$collected    += (int) $payment['total_amount'];
-			$tip          += (int) $payment['tip_amount'];
-		}
-
-		$requested           = CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() );
-		$tip                 = max( $tip, $collected - $requested, 0 );
 		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
 		$recorded_payment_ids = is_array( $recorded_payment_ids ) ? $recorded_payment_ids : array();
+		$payment_ids          = array();
+		$new_payment_ids      = array();
+		$new_collected        = 0;
+		$new_tip              = 0;
+
+		foreach ( $payments as $payment ) {
+			$payment_id    = (string) $payment['id'];
+			$payment_ids[] = $payment_id;
+			if ( in_array( $payment_id, $recorded_payment_ids, true ) || in_array( $payment_id, $new_payment_ids, true ) ) {
+				continue;
+			}
+
+			$new_payment_ids[] = $payment_id;
+			$new_collected   += (int) $payment['total_amount'];
+			$new_tip         += (int) $payment['tip_amount'];
+		}
+
+		$requested          = CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() );
+		$recorded_collected = (int) $order->get_meta( '_sqtwc_collected_amount', true );
+		$recorded_tip       = (int) $order->get_meta( '_sqtwc_tip_amount', true );
+		$collected          = $recorded_collected + $new_collected;
+		$tip                = max( $recorded_tip + $new_tip, $collected - $requested, 0 );
+		$merged_payment_ids = array_values( array_unique( array_merge( $recorded_payment_ids, $payment_ids ) ) );
 
 		if ( $order->is_paid() && ! empty( array_diff( $payment_ids, $recorded_payment_ids ) ) ) {
 			$duplicate_ids   = $order->get_meta( '_sqtwc_duplicate_payment_ids', true );
@@ -184,7 +196,7 @@ final class CheckoutReconciler {
 			);
 		}
 
-		$order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
+		$order->update_meta_data( '_sqtwc_payment_ids', $merged_payment_ids );
 		$order->update_meta_data( '_sqtwc_collected_amount', $collected );
 		$order->update_meta_data( '_sqtwc_tip_amount', $tip );
 
@@ -192,7 +204,7 @@ final class CheckoutReconciler {
 			$this->cache_state( $checkout, $order );
 		}
 
-		if ( $tip > 0 ) {
+		if ( $tip > $recorded_tip ) {
 			$order->add_order_note( __( 'Square Terminal collected a tip in addition to the requested order amount.', 'square-terminal-for-woocommerce' ) );
 		}
 
@@ -232,7 +244,7 @@ final class CheckoutReconciler {
 		}
 
 		if ( ! $order->is_paid() ) {
-			$order->payment_complete( (string) ( $payment_ids[0] ?? '' ) );
+			$order->payment_complete( (string) ( $new_payment_ids[0] ?? $merged_payment_ids[0] ?? '' ) );
 		}
 
 		$message = self::cashier_message( 'COMPLETED' );
@@ -358,7 +370,18 @@ final class CheckoutReconciler {
 	private function remove_abandoned_checkout( string $checkout_id, $order ): void {
 		$ids = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
 		$ids = is_array( $ids ) ? $ids : array();
-		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array_values( array_diff( $ids, array( $checkout_id ) ) ) );
+		$ids = array_values( array_diff( $ids, array( $checkout_id ) ) );
+		if ( empty( $ids ) ) {
+			$order->delete_meta_data( '_sqtwc_abandoned_checkout_ids' );
+		} else {
+			$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $ids );
+		}
+
+		if ( '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) || ! empty( $ids ) ) {
+			OrderMeta::index_order( (int) $order->get_id() );
+		} else {
+			OrderMeta::unindex_order( (int) $order->get_id() );
+		}
 	}
 
 	/**

@@ -166,8 +166,67 @@ final class CheckoutReconcilerTest extends TestCase {
 
 		self::assertTrue( $result['applied'] );
 		self::assertTrue( $order->paid );
-		self::assertSame( array(), $order->get_meta( '_sqtwc_abandoned_checkout_ids' ) );
+		self::assertArrayNotHasKey( '_sqtwc_abandoned_checkout_ids', $order->meta );
 		self::assertSame( 'attempt_current', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+	}
+
+	public function test_complete_merges_payment_ids_and_sums_amounts_across_two_captures(): void {
+		$order        = $this->open_order();
+		$order->total = '20.00';
+		$adapter      = new ReconcilerAdapter();
+		$adapter->payments['pay_first'] = array(
+			'id'             => 'pay_first',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 800,
+			'total_currency' => 'USD',
+			'tip_amount'     => 10,
+			'tip_currency'   => 'USD',
+			'card_status'    => null,
+		);
+		$adapter->payments['pay_second'] = array(
+			'id'             => 'pay_second',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1200,
+			'total_currency' => 'USD',
+			'tip_amount'     => 20,
+			'tip_currency'   => 'USD',
+			'card_status'    => null,
+		);
+		$reconciler = new CheckoutReconciler( $adapter );
+
+		$reconciler->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_first' ),
+				'updated_at'   => '2026-07-16T10:00:03Z',
+			),
+			$order
+		);
+
+		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt_second' );
+		$order->update_meta_data( '_sqtwc_checkout_idempotency_key', 'idem_second' );
+		$order->update_meta_data( '_sqtwc_checkout_id', 'chk_second' );
+		$order->update_meta_data( '_sqtwc_checkout_status', 'PENDING' );
+		$order->update_meta_data( '_sqtwc_device_id', 'device_current' );
+		$order->update_meta_data( '_sqtwc_attempt_started', 1784196000 );
+
+		$reconciler->reconcile(
+			array(
+				'id'           => 'chk_second',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_first', 'pay_second' ),
+				'updated_at'   => '2026-07-16T10:01:03Z',
+			),
+			$order
+		);
+
+		self::assertSame( array( 'pay_first', 'pay_second' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+		self::assertSame( 2000, $order->get_meta( '_sqtwc_collected_amount' ) );
+		self::assertSame( 30, $order->get_meta( '_sqtwc_tip_amount' ) );
+		self::assertTrue( $order->paid );
 	}
 
 	public function test_payment_log_is_structured_and_capped_at_one_hundred(): void {

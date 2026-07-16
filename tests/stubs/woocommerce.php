@@ -20,11 +20,11 @@ class SQTWC_Test_Order {
 	public function get_id(){return $this->id;} public function is_paid(){return $this->paid;} public function get_order_key(){return $this->key;}
 	public function get_checkout_payment_url($on_checkout=false){return '/checkout/order-pay/'.$this->id.'/?pay_for_order=true&key='.$this->key;}
 	public function get_checkout_order_received_url(){return '/checkout/order-received/'.$this->id.'/?key='.$this->key;} public function get_order_number(){return (string) $this->id;}
-	public function add_order_note($note){$this->notes[]=$note;} public function update_meta_data($k,$v){$this->meta[$k]=$v;} public function get_meta($k,$single=true){return $this->meta[$k] ?? ($single ? '' : array());}
+	public function add_order_note($note){$this->notes[]=$note;} public function update_meta_data($k,$v){$this->meta[$k]=$v;} public function delete_meta_data($k){unset($this->meta[$k]);} public function get_meta($k,$single=true){return $this->meta[$k] ?? ($single ? '' : array());}
 	public function save(){} public function set_transaction_id($id){$this->transaction_id=$id;} public function payment_complete($id=''){ $this->payment_complete_calls++; $this->paid=true; if($id){$this->transaction_id=$id;} }
 	public function update_status($status, $note = '', $manual = false){$this->status=$status; if($note){$this->add_order_note($note);} return true;} public function get_status(){return $this->status;}
 	public function get_currency(){return $this->currency;} public function get_total(){return $this->total;}
 }
 if ( ! function_exists( 'wc_get_order' ) ) { function wc_get_order( $id ) { return $GLOBALS['sqtwc_orders'][$id] ?? null; } }
 if ( ! function_exists( 'wc_get_orders' ) ) { function wc_get_orders( $args = array() ) { $GLOBALS['sqtwc_wc_get_orders_args'][] = $args; if ( isset( $GLOBALS['sqtwc_wc_get_orders_callback'] ) ) { return $GLOBALS['sqtwc_wc_get_orders_callback']( $args ); } return $GLOBALS['sqtwc_order_query_results'] ?? array(); } }
-if ( ! function_exists( 'wc_get_logger' ) ) { function wc_get_logger() { return new class { public array $logs = array(); public function info($m,$c=array()){$this->logs[]=array('info',$m,$c);} public function error($m,$c=array()){$this->logs[]=array('error',$m,$c);} }; } }
+if ( ! function_exists( 'wc_get_logger' ) ) { function wc_get_logger() { return new class { public function info($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('info',$m,$c);} public function warning($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('warning',$m,$c);} public function error($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('error',$m,$c);} }; } }

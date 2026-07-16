@@ -79,6 +79,11 @@ final class AjaxHandler {
 			return $this->error_response( 409, __( 'This order is already paid.', 'square-terminal-for-woocommerce' ) );
 		}
 
+		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
+		if ( (int) $order->get_meta( '_sqtwc_collected_amount', true ) > 0 || ( is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids ) ) ) {
+			return $this->error_response( 409, __( 'Square already captured a partial payment for this order. Resolve it in Square Dashboard (refund or complete manually) before starting another Terminal payment.', 'square-terminal-for-woocommerce' ) );
+		}
+
 		$current_checkout = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 		$current_attempt  = (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
 		$current_device   = (string) $order->get_meta( '_sqtwc_device_id', true );
@@ -93,23 +98,26 @@ final class AjaxHandler {
 			}
 
 			$device_id = $current_device;
+			$create_data = $order->get_meta( '_sqtwc_attempt_request', true );
+			if ( ! is_array( $create_data ) || empty( $create_data ) ) {
+				return $this->error_response( 409, __( 'The saved Terminal payment request is unavailable. Release the payment and start again.', 'square-terminal-for-woocommerce' ) );
+			}
 		} else {
 			$current_attempt  = wp_generate_uuid4();
 			$idempotency_key = wp_generate_uuid4();
-			OrderMeta::start_attempt( $order, $current_attempt, $idempotency_key, $device_id );
+			$create_data = array(
+				'amount'              => CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ),
+				'currency'            => $order->get_currency(),
+				'device_id'           => $device_id,
+				'reference_id'        => 'woocommerce_order_' . $order->get_id(),
+				'idempotency_key'     => $idempotency_key,
+				'deadline_duration'   => 'PT5M',
+				'note'                => $this->checkout_note( $order ),
+				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
+				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
+			);
+			OrderMeta::start_attempt( $order, $current_attempt, $idempotency_key, $device_id, $create_data );
 		}
-
-		$create_data = array(
-			'amount'              => CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ),
-			'currency'            => $order->get_currency(),
-			'device_id'           => $device_id,
-			'reference_id'        => 'woocommerce_order_' . $order->get_id(),
-			'idempotency_key'     => $idempotency_key,
-			'deadline_duration'   => 'PT5M',
-			'note'                => $this->checkout_note( $order ),
-			'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
-			'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
-		);
 
 		$result = null;
 		for ( $attempt = 0; $attempt < 2; ++$attempt ) {
@@ -121,7 +129,7 @@ final class AjaxHandler {
 				Logger::error( 'Square Terminal checkout creation failed', $mapped['log_context'] );
 				if ( ! $mapped['retriable'] || 1 === $attempt ) {
 					OrderMeta::append_log( $order, 'error', $mapped['cashier_message'] );
-					if ( ! $mapped['retriable'] ) {
+					if ( ! $mapped['retriable'] && 'IDEMPOTENCY_KEY_REUSED' !== (string) ( $mapped['log_context']['code'] ?? '' ) ) {
 						// Terminal failure: close the attempt so a fresh create is allowed.
 						// Retriable exhaustion keeps the attempt so a later retry resumes
 						// with the same idempotency key (Square may have created the checkout).
@@ -135,10 +143,14 @@ final class AjaxHandler {
 		}
 
 		if ( ! is_array( $result ) || empty( $result['id'] ) ) {
-			OrderMeta::close_current_attempt( $order, 'failed' );
+			// Indeterminate: Square may have created the checkout even though the
+			// response was unusable. Keep the attempt so a retry resumes with the
+			// same idempotency key (recovering the orphaned checkout's identity)
+			// and the cashier can still release it via detach.
+			OrderMeta::append_log( $order, 'error', __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
 			$order->save();
 
-			return $this->error_response( 502, __( 'Square did not return a Terminal checkout ID.', 'square-terminal-for-woocommerce' ) );
+			return $this->error_response( 502, __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		$order->update_meta_data( '_sqtwc_checkout_id', (string) $result['id'] );
@@ -148,6 +160,7 @@ final class AjaxHandler {
 		}
 		OrderMeta::append_log( $order, 'info', __( 'Terminal checkout created.', 'square-terminal-for-woocommerce' ) );
 		$order->save();
+		OrderMeta::index_order( (int) $order->get_id() );
 
 		Logger::info(
 			'Terminal checkout created',

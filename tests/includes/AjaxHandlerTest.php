@@ -91,9 +91,11 @@ final class AjaxHandlerTest extends TestCase {
 		$GLOBALS['sqtwc_current_user_can']  = false;
 		$GLOBALS['sqtwc_is_user_logged_in'] = false;
 		$GLOBALS['sqtwc_nonce_valid']       = false;
-		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
-			'skip_receipt_screen' => 'yes',
-			'collect_signature'   => 'no',
+		$GLOBALS['sqtwc_options'] = array(
+			'woocommerce_sqtwc_settings' => array(
+				'skip_receipt_screen' => 'yes',
+				'collect_signature'   => 'no',
+			),
 		);
 		Settings::reset_cache_for_tests();
 	}
@@ -146,6 +148,21 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 0, $adapter->creates );
 	}
 
+	public function test_create_blocks_when_square_already_captured_partial_funds(): void {
+		$adapter = new LifecycleAdapter();
+		foreach ( array( '_sqtwc_collected_amount' => 500, '_sqtwc_payment_ids' => array( 'pay_partial' ) ) as $meta_key => $meta_value ) {
+			$order = new \SQTWC_Test_Order( 99 );
+			$order->update_meta_data( $meta_key, $meta_value );
+			$GLOBALS['sqtwc_orders'][99] = $order;
+
+			$result = ( new AjaxHandler( $adapter ) )->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'D', 'order_key' => 'key' ) );
+
+			self::assertSame( 409, $result['status'] );
+			self::assertSame( 'Square already captured a partial payment for this order. Resolve it in Square Dashboard (refund or complete manually) before starting another Terminal payment.', $result['cashier_message'] );
+		}
+		self::assertSame( 0, $adapter->creates );
+	}
+
 	public function test_create_recomputes_amount_persists_attempt_and_retries_once_with_same_key(): void {
 		$order                       = new \SQTWC_Test_Order( 99 );
 		$order->total                = '19.87';
@@ -177,6 +194,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 'chk_created', $order->get_meta( '_sqtwc_checkout_id' ) );
 		self::assertSame( 'device_a', $order->get_meta( '_sqtwc_device_id' ) );
 		self::assertSame( 'PENDING', $order->get_meta( '_sqtwc_checkout_status' ) );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_create_maps_non_retriable_provider_error_without_exposing_detail(): void {
@@ -232,7 +250,9 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
+		self::assertArrayNotHasKey( '_sqtwc_attempt_request', $order->meta );
 		self::assertSame( 'failed', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 
 		$created = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
 
@@ -269,6 +289,58 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 'device_a', $adapter->create_requests[2]['device_id'] );
 	}
 
+	public function test_indeterminate_create_response_keeps_attempt_and_resume_recovers_checkout(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results     = array(
+			array( 'id' => null, 'status' => null ),
+			$adapter->checkout( 'PENDING', array( 'id' => 'chk_orphan' ) ),
+		);
+		$handler                     = new AjaxHandler( $adapter );
+
+		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 502, $failed['status'] );
+		self::assertNotSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ), 'An indeterminate create response must keep the attempt: Square may have created the checkout.' );
+		self::assertNotSame( '', $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
+
+		$resumed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $resumed['status'] );
+		self::assertSame( 'chk_orphan', $order->get_meta( '_sqtwc_checkout_id' ) );
+		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $adapter->create_requests[1]['idempotency_key'], 'Resume must replay the same idempotency key so an orphaned Square checkout is recovered, not duplicated.' );
+	}
+
+	public function test_resume_replays_stored_attempt_request_verbatim_after_order_changes(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$order->total                = '19.87';
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results     = array(
+			new \RuntimeException( 'first timeout' ),
+			new \RuntimeException( 'second timeout' ),
+			$adapter->checkout( 'PENDING', array( 'id' => 'chk_resumed' ) ),
+		);
+		$handler = new AjaxHandler( $adapter );
+
+		$handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+		$original_request = $adapter->create_requests[0];
+		self::assertSame( $original_request, $order->get_meta( '_sqtwc_attempt_request' ) );
+
+		$order->total = '99.99';
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'skip_receipt_screen' => 'no',
+			'collect_signature'   => 'yes',
+		);
+		Settings::reset_cache_for_tests();
+
+		$result = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $result['status'] );
+		self::assertSame( $original_request, $adapter->create_requests[2] );
+	}
+
 	public function test_resume_with_different_posted_device_returns_conflict(): void {
 		$order                       = $this->checkoutless_order();
 		$GLOBALS['sqtwc_orders'][99] = $order;
@@ -281,7 +353,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 0, $adapter->creates );
 	}
 
-	public function test_idempotency_key_reused_create_failure_returns_conflict_and_closes_attempt(): void {
+	public function test_idempotency_key_reused_create_failure_returns_conflict_and_keeps_attempt(): void {
 		$order                       = new \SQTWC_Test_Order( 99 );
 		$GLOBALS['sqtwc_orders'][99] = $order;
 		$adapter                     = new LifecycleAdapter();
@@ -302,9 +374,10 @@ final class AjaxHandlerTest extends TestCase {
 
 		self::assertSame( 409, $result['status'] );
 		self::assertFalse( $result['retriable'] );
-		self::assertSame( 'The previous payment request may already be active. Check the terminal or release the payment.', $result['cashier_message'] );
-		self::assertSame( 'failed', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
-		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( 'The previous payment request may still be active on the terminal. Check the terminal, then use Check Status or release the payment.', $result['cashier_message'] );
+		self::assertSame( '00000000-0000-4000-8000-000000000000', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
+		self::assertSame( array(), $order->get_meta( '_sqtwc_attempt_history', false ) );
 	}
 
 	public function test_status_endpoint_throttles_and_force_bypasses_cache(): void {
@@ -396,6 +469,7 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_id' ) );
 		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
+		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_detach_rejects_stale_register_identity(): void {
