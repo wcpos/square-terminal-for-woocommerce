@@ -218,6 +218,21 @@ final class PaymentSweeperTest extends TestCase {
 		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
+	public function test_failed_legacy_seed_does_not_mark_seeding_complete(): void {
+		$GLOBALS['sqtwc_options'] = array();
+		$GLOBALS['sqtwc_wc_get_orders_callback'] = static function (): array {
+			throw new \RuntimeException( 'query interrupted' );
+		};
+
+		try {
+			( new PaymentSweeper( new SweeperAdapter(), new SweeperReconciler(), new OrderLock() ) )->sweep();
+		} catch ( \RuntimeException $exception ) {
+			self::assertSame( 'query interrupted', $exception->getMessage() );
+		}
+
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_seeded', $GLOBALS['sqtwc_options'] );
+	}
+
 	public function test_index_order_preserves_the_oldest_work_timestamp_and_unindex_deletes_the_order_option(): void {
 		$GLOBALS['sqtwc_options']['sqtwc_reconcile_99'] = '123';
 

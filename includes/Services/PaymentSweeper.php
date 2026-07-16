@@ -146,7 +146,6 @@ final class PaymentSweeper {
 
 			OrderMeta::index_order( $order_id );
 		}
-
 		// Mark completion only after every candidate is indexed: an interrupted
 		// seed retries on the next sweep (index_order is idempotent, so a
 		// concurrent double-seed is harmless). The marker value sorts after all
