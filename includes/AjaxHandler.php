@@ -96,6 +96,7 @@ final class AjaxHandler {
 				$mapped = $this->error_mapper->map( $exception );
 				Logger::error( 'Square Terminal checkout creation failed', $mapped['log_context'] );
 				if ( ! $mapped['retriable'] || 1 === $attempt ) {
+					OrderMeta::close_current_attempt( $order, 'FAILED' );
 					OrderMeta::append_log( $order, 'error', $mapped['cashier_message'] );
 					$order->save();
 

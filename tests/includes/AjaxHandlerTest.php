@@ -205,6 +205,31 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 1, $adapter->creates );
 	}
 
+	public function test_create_closes_failed_attempt_so_another_terminal_can_retry(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results     = array(
+			new \RuntimeException( 'first transport failure' ),
+			new \RuntimeException( 'second transport failure' ),
+		);
+		$handler = new AjaxHandler( $adapter );
+
+		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 502, $failed['status'] );
+		self::assertSame( 2, $adapter->creates );
+		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
+		self::assertSame( 'FAILED', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
+
+		$retried = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_b', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $retried['status'] );
+		self::assertSame( 'device_b', $order->get_meta( '_sqtwc_device_id' ) );
+	}
+
 	public function test_status_endpoint_throttles_and_force_bypasses_cache(): void {
 		$order = $this->open_order();
 		$order->update_meta_data( '_sqtwc_square_checked_at', time() );
