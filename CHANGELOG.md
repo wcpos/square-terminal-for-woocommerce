@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.2.1] - 2026-07-16
+
+### Fixed
+
+- Block new Terminal checkouts while an unresolved partial capture exists; payment IDs and collected/tip totals are now append-only so no capture is dropped from the record.
+- Keep attempts resumable on indeterminate create responses and `IDEMPOTENCY_KEY_REUSED`; resume replays the persisted original create payload (`_sqtwc_attempt_request`) verbatim.
+- Replace sweeper meta-query discovery with an explicit `sqtwc_pending_reconciliation` index (oldest-first, storage-agnostic, starvation-free); delete abandoned-checkout meta when empty.
+- Owner-token option-fallback locks with atomic owner-checked release and a 300-second lease.
+
 ## [0.2.0] - 2026-07-16
 
 ### Added

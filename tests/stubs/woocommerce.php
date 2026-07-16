@@ -20,7 +20,7 @@ class SQTWC_Test_Order {
 	public function get_id(){return $this->id;} public function is_paid(){return $this->paid;} public function get_order_key(){return $this->key;}
 	public function get_checkout_payment_url($on_checkout=false){return '/checkout/order-pay/'.$this->id.'/?pay_for_order=true&key='.$this->key;}
 	public function get_checkout_order_received_url(){return '/checkout/order-received/'.$this->id.'/?key='.$this->key;} public function get_order_number(){return (string) $this->id;}
-	public function add_order_note($note){$this->notes[]=$note;} public function update_meta_data($k,$v){$this->meta[$k]=$v;} public function get_meta($k,$single=true){return $this->meta[$k] ?? ($single ? '' : array());}
+	public function add_order_note($note){$this->notes[]=$note;} public function update_meta_data($k,$v){$this->meta[$k]=$v;} public function delete_meta_data($k){unset($this->meta[$k]);} public function get_meta($k,$single=true){return $this->meta[$k] ?? ($single ? '' : array());}
 	public function save(){} public function set_transaction_id($id){$this->transaction_id=$id;} public function payment_complete($id=''){ $this->payment_complete_calls++; $this->paid=true; if($id){$this->transaction_id=$id;} }
 	public function update_status($status, $note = '', $manual = false){$this->status=$status; if($note){$this->add_order_note($note);} return true;} public function get_status(){return $this->status;}
 	public function get_currency(){return $this->currency;} public function get_total(){return $this->total;}

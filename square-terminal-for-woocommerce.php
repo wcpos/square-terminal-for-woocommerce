@@ -3,7 +3,7 @@
  * Plugin Name:       Square Terminal for WooCommerce
  * Plugin URI:        https://github.com/kilbot/square-terminal-for-woocommerce
  * Description:       Collect WooCommerce order payments on Square Terminal devices.
- * Version:           0.2.0
+ * Version:           0.2.1
  * Author:            kilbot
  * Author URI:        https://wcpos.com
  * Text Domain:       square-terminal-for-woocommerce
@@ -27,7 +27,7 @@ if ( ! \defined( 'ABSPATH' ) ) {
 }
 
 if ( ! \defined( __NAMESPACE__ . '\VERSION' ) ) {
-	\define( __NAMESPACE__ . '\VERSION', '0.2.0' );
+	\define( __NAMESPACE__ . '\VERSION', '0.2.1' );
 }
 if ( ! \defined( __NAMESPACE__ . '\PLUGIN_NAME' ) ) {
 	\define( __NAMESPACE__ . '\PLUGIN_NAME', 'square-terminal-for-woocommerce' );

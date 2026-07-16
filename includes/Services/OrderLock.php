@@ -12,12 +12,15 @@ use Throwable;
 
 /**
  * Serializes payment lifecycle mutations for a WooCommerce order.
+ *
+ * MySQL GET_LOCK provides the real mutual-exclusion guarantee. The option
+ * driver is a best-effort fallback for non-MySQL environments.
  */
 final class OrderLock {
 	/**
 	 * Locks held by this instance.
 	 *
-	 * @var array<int,array{driver:string,name:string,count:int}>
+	 * @var array<int,array{driver:string,name:string,count:int,value:string}>
 	 */
 	private array $held = array();
 
@@ -38,14 +41,18 @@ final class OrderLock {
 		}
 
 		$option_name = 'sqtwc_lock_' . $order_id;
-		if ( ! add_option( $option_name, time(), '', 'no' ) ) {
-			$created = (int) get_option( $option_name, 0 );
-			if ( $created <= 0 || $created >= ( time() - 60 ) ) {
+		$owner_token = function_exists( 'wp_generate_password' ) ? wp_generate_password( 12, false ) : uniqid( 'sqtwc_', true );
+		$lock_value  = $owner_token . '|' . time();
+		if ( ! add_option( $option_name, $lock_value, '', 'no' ) ) {
+			$existing = (string) get_option( $option_name, '' );
+			$parts    = explode( '|', $existing, 2 );
+			$created  = (int) ( $parts[1] ?? $parts[0] );
+			if ( $created <= 0 || $created >= ( time() - 300 ) ) {
 				return false;
 			}
 
 			delete_option( $option_name );
-			if ( ! add_option( $option_name, time(), '', 'no' ) ) {
+			if ( ! add_option( $option_name, $lock_value, '', 'no' ) ) {
 				return false;
 			}
 		}
@@ -54,6 +61,7 @@ final class OrderLock {
 			'driver' => 'option',
 			'name'   => $option_name,
 			'count'  => 1,
+			'value'  => $lock_value,
 		);
 
 		return true;
@@ -77,7 +85,7 @@ final class OrderLock {
 		unset( $this->held[ $order_id ] );
 
 		if ( 'option' === $lock['driver'] ) {
-			delete_option( $lock['name'] );
+			$this->release_option_lock( $lock['name'], $lock['value'] );
 
 			return;
 		}
@@ -91,6 +99,29 @@ final class OrderLock {
 			$wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $lock['name'] ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- MySQL advisory locks are the primary atomic lock.
 		} catch ( Throwable $exception ) {
 			unset( $exception );
+		}
+	}
+
+	/**
+	 * Release only the exact option value acquired by this instance.
+	 */
+	private function release_option_lock( string $option_name, string $lock_value ): void {
+		global $wpdb;
+		if ( is_object( $wpdb ) && isset( $wpdb->options ) && method_exists( $wpdb, 'query' ) && method_exists( $wpdb, 'prepare' ) ) {
+			try {
+				$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s", $option_name, $lock_value ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Atomic owner-checked release is required for the fallback lock.
+				if ( $deleted && function_exists( 'wp_cache_delete' ) ) {
+					wp_cache_delete( $option_name, 'options' );
+				}
+			} catch ( Throwable $exception ) {
+				unset( $exception );
+			}
+
+			return;
+		}
+
+		if ( (string) get_option( $option_name, '' ) === $lock_value ) {
+			delete_option( $option_name );
 		}
 	}
 
@@ -146,6 +177,7 @@ final class OrderLock {
 			'driver' => 'mysql',
 			'name'   => $name,
 			'count'  => 1,
+			'value'  => '',
 		);
 
 		return true;

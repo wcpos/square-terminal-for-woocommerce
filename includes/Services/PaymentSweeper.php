@@ -85,11 +85,37 @@ final class PaymentSweeper {
 	 * Reconcile up to 25 orders with stale active or detached checkouts.
 	 */
 	public function sweep(): void {
+		$index = get_option( OrderMeta::RECONCILIATION_INDEX_OPTION, null );
+		if ( null === $index ) {
+			$index = $this->seed_legacy_index();
+		}
+		$index = $this->normalize_index( $index );
+		asort( $index, SORT_NUMERIC );
+
+		foreach ( array_slice( array_keys( $index ), 0, 25 ) as $order_id ) {
+
+			try {
+				$this->order_lock->with_lock(
+					(int) $order_id,
+					fn() => $this->sweep_order( $order_id )
+				);
+			} catch ( Throwable $exception ) {
+				$this->log_error( (int) $order_id, '', $exception );
+			}
+		}
+	}
+
+	/**
+	 * Seed the explicit index once from legacy lifecycle metadata.
+	 *
+	 * @return array<int,int>
+	 */
+	private function seed_legacy_index(): array {
 		$orders = wc_get_orders(
 			array(
-				'limit'      => 25,
+				'limit'      => -1,
 				'return'     => 'objects',
-				'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- The bounded reconciliation sweep is explicitly keyed by lifecycle meta.
+				'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- One-time lazy migration from the legacy reconciliation discovery path.
 					'relation' => 'OR',
 					array(
 						'relation' => 'AND',
@@ -113,22 +139,45 @@ final class PaymentSweeper {
 				),
 			)
 		);
-
+		$index  = array();
+		$now    = time();
 		foreach ( $orders as $candidate ) {
 			$order_id = is_object( $candidate ) && method_exists( $candidate, 'get_id' ) ? (int) $candidate->get_id() : absint( $candidate );
 			if ( $order_id <= 0 ) {
 				continue;
 			}
 
-			try {
-				$this->order_lock->with_lock(
-					$order_id,
-					fn() => $this->sweep_order( $order_id )
-				);
-			} catch ( Throwable $exception ) {
-				$this->log_error( $order_id, '', $exception );
-			}
+			$started            = is_object( $candidate ) && method_exists( $candidate, 'get_meta' ) ? (int) $candidate->get_meta( '_sqtwc_attempt_started', true ) : 0;
+			$index[ $order_id ] = $started > 0 ? $started : $now;
 		}
+		update_option( OrderMeta::RECONCILIATION_INDEX_OPTION, $index );
+
+		return $index;
+	}
+
+	/**
+	 * Normalize persisted index keys and timestamps.
+	 *
+	 * @param mixed $index Persisted option value.
+	 * @return array<int,int>
+	 */
+	private function normalize_index( $index ): array {
+		if ( ! is_array( $index ) ) {
+			return array();
+		}
+
+		$normalized = array();
+		foreach ( $index as $order_id => $timestamp ) {
+			$order_id = absint( $order_id );
+			if ( $order_id <= 0 ) {
+				continue;
+			}
+
+			$timestamp = (int) $timestamp;
+			$normalized[ $order_id ] = $timestamp > 0 ? $timestamp : time();
+		}
+
+		return $normalized;
 	}
 
 	/**
@@ -137,6 +186,8 @@ final class PaymentSweeper {
 	private function sweep_order( int $order_id ): void {
 		$order = wc_get_order( $order_id );
 		if ( ! $order ) {
+			OrderMeta::unindex_order( $order_id );
+
 			return;
 		}
 
@@ -169,6 +220,14 @@ final class PaymentSweeper {
 			} catch ( Throwable $exception ) {
 				$this->log_error( $order_id, $checkout_id, $exception );
 			}
+		}
+
+		$abandoned = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
+		$abandoned = is_array( $abandoned ) ? array_filter( $abandoned ) : array();
+		if ( '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) || ! empty( $abandoned ) ) {
+			OrderMeta::index_order( $order_id );
+		} else {
+			OrderMeta::unindex_order( $order_id );
 		}
 	}
 
@@ -203,7 +262,12 @@ final class PaymentSweeper {
 	private function remove_abandoned_checkout( $order, string $checkout_id ): void {
 		$ids = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
 		$ids = is_array( $ids ) ? $ids : array();
-		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array_values( array_diff( $ids, array( $checkout_id ) ) ) );
+		$ids = array_values( array_diff( $ids, array( $checkout_id ) ) );
+		if ( empty( $ids ) ) {
+			$order->delete_meta_data( '_sqtwc_abandoned_checkout_ids' );
+		} else {
+			$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $ids );
+		}
 	}
 
 	/**
