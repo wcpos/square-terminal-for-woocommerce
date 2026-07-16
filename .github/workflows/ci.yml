@@ -44,6 +44,14 @@ jobs:
       - name: Run PHPUnit
         run: composer test
 
+      - name: Set up Node
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '22'
+
+      - name: Run JS tests
+        run: composer test:js
+
   lint:
     name: Coding standards
     runs-on: ubuntu-latest
