@@ -162,7 +162,10 @@ final class AjaxHandler {
 					}
 					$order->save();
 
-					return $this->mapped_error_response( $mapped );
+					$response = $this->mapped_error_response( $mapped );
+					$response['detach_available'] = '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
+
+					return $response;
 				}
 			}
 		}
@@ -175,7 +178,10 @@ final class AjaxHandler {
 			OrderMeta::append_log( $order, 'error', __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
 			$order->save();
 
-			return $this->error_response( 502, __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
+			$response = $this->error_response( 502, __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
+			$response['detach_available'] = true;
+
+			return $response;
 		}
 
 		$order->update_meta_data( '_sqtwc_checkout_id', (string) $result['id'] );

@@ -204,6 +204,12 @@
 			state.attemptId = root.getAttribute('data-attempt-id') || '';
 			state.deviceId = root.getAttribute('data-device-id') || state.deviceId;
 			log('info', 'Resuming in-flight payment after reload');
+			if (!state.checkoutId) {
+				state.detachAvailable = true;
+				setState(STATES.FINAL);
+				setStatus(strings.detachHint, 'warning', false);
+				return;
+			}
 			setState(STATES.POLLING);
 			setStatus(strings.statusInProgress, 'info', true);
 			beginPolling(true);
@@ -278,6 +284,7 @@
 		}
 
 		function failCreate(res) {
+			state.detachAvailable = !!(res.body && res.body.detach_available);
 			setState(STATES.FINAL);
 			setStatus(errorMessage(res), 'error', false);
 			log('error', 'Create failed: ' + errorMessage(res));
@@ -349,7 +356,7 @@
 					log('error', 'Detach failed: ' + errorMessage(res));
 					// Leave detach available so the cashier can retry.
 					state.detachAvailable = true;
-					setState(STATES.POLLING);
+					setState(state.checkoutId ? STATES.POLLING : STATES.FINAL);
 					render();
 					return;
 				}
@@ -647,7 +654,7 @@
 			disable(els.check, s === STATES.CREATING || s === STATES.CANCELLING);
 
 			// Detach: only after a cancel flow fails to conclude.
-			showEl(els.detach, state.detachAvailable && (s === STATES.POLLING || s === STATES.CANCELLING));
+			showEl(els.detach, state.detachAvailable && (s === STATES.POLLING || s === STATES.CANCELLING || s === STATES.FINAL));
 			disable(els.detach, s === STATES.CANCELLING || !state.detachAvailable);
 
 			// Device selector: locked while an attempt is active.

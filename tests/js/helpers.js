@@ -141,7 +141,7 @@ function buildDom(opts) {
 	}
 	if (opts.resume) {
 		root.setAttribute('data-resume', '1');
-		root.setAttribute('data-checkout-id', opts.checkoutId || 'chk_resume');
+		root.setAttribute('data-checkout-id', Object.prototype.hasOwnProperty.call(opts, 'checkoutId') ? opts.checkoutId : 'chk_resume');
 		root.setAttribute('data-attempt-id', opts.attemptId || 'att_resume');
 		root.setAttribute('data-device-id', opts.deviceId || 'dev_resume');
 		root.setAttribute('data-status', opts.status || 'IN_PROGRESS');

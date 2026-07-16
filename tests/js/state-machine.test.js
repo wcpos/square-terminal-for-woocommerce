@@ -106,6 +106,35 @@ test('every mutation disables its trigger while in flight (no duplicate create)'
 	assert.equal(ctx.fetch.calls.filter((c) => c.action === 'sqtwc_create_terminal_checkout').length, 1);
 });
 
+test('retained checkoutless create failure exposes release', async () => {
+	const ctx = setup(payment);
+	ctx.els.select.value = 'dev_success';
+	ctx.controller.start();
+	await flush();
+	ctx.fetch.settle({ status: 502, cashier_message: 'Create unconfirmed.', detach_available: true });
+	await flush();
+
+	assert.equal(ctx.controller.state.name, payment.STATES.FINAL);
+	assert.equal(ctx.controller.state.detachAvailable, true);
+	assert.equal(hidden(ctx.els.detach), false);
+
+	ctx.controller.detach();
+	await flush();
+	assert.equal(ctx.fetch.lastCall().action, 'sqtwc_detach_terminal_checkout');
+	assert.equal(Object.hasOwn(ctx.fetch.lastCall().params, 'checkout_id'), false);
+});
+
+test('checkoutless reload exposes release without polling', async () => {
+	const ctx = setup(payment, {
+		dom: { resume: true, checkoutId: '', attemptId: 'att_open', deviceId: 'dev_success' }
+	});
+
+	assert.equal(ctx.controller.state.name, payment.STATES.FINAL);
+	assert.equal(ctx.controller.state.detachAvailable, true);
+	assert.equal(hidden(ctx.els.detach), false);
+	assert.equal(ctx.fetch.callCount(), 0);
+});
+
 test('cancel that resolves COMPLETED redirects instead of showing cancelled', async () => {
 	const ctx = setup(payment);
 	ctx.els.select.value = 'dev_success';

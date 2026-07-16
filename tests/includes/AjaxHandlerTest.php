@@ -300,6 +300,7 @@ final class AjaxHandlerTest extends TestCase {
 		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
 
 		self::assertSame( 502, $failed['status'] );
+		self::assertTrue( $failed['detach_available'] );
 		self::assertSame( '00000000-0000-4000-8000-000000000000', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
 		self::assertSame( 'device_a', $order->get_meta( '_sqtwc_device_id' ) );
@@ -327,6 +328,7 @@ final class AjaxHandlerTest extends TestCase {
 		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
 
 		self::assertSame( 502, $failed['status'] );
+		self::assertTrue( $failed['detach_available'] );
 		self::assertNotSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ), 'An indeterminate create response must keep the attempt: Square may have created the checkout.' );
 		self::assertNotSame( '', $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
 
@@ -399,6 +401,7 @@ final class AjaxHandlerTest extends TestCase {
 
 		self::assertSame( 409, $result['status'] );
 		self::assertFalse( $result['retriable'] );
+		self::assertTrue( $result['detach_available'] );
 		self::assertSame( 'The previous payment request may still be active on the terminal. Check the terminal, then use Check Status or release the payment.', $result['cashier_message'] );
 		self::assertSame( '00000000-0000-4000-8000-000000000000', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );

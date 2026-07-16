@@ -433,14 +433,15 @@ class Gateway extends \WC_Payment_Gateway {
 		$attrs = sprintf( ' data-order-key="%s"', esc_attr( (string) $order->get_order_key() ) );
 
 		$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
-		if ( '' === $checkout_id || $order->is_paid() ) {
+		$attempt_id  = (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
+		if ( ( '' === $checkout_id && '' === $attempt_id ) || $order->is_paid() ) {
 			return $attrs;
 		}
 
 		return $attrs . sprintf(
 			' data-resume="1" data-checkout-id="%1$s" data-attempt-id="%2$s" data-device-id="%3$s" data-status="%4$s"',
 			esc_attr( $checkout_id ),
-			esc_attr( (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) ),
+			esc_attr( $attempt_id ),
 			esc_attr( (string) $order->get_meta( '_sqtwc_device_id', true ) ),
 			esc_attr( (string) $order->get_meta( '_sqtwc_checkout_status', true ) )
 		);

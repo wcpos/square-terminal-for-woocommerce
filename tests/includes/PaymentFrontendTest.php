@@ -43,6 +43,19 @@ final class PaymentFrontendTest extends TestCase {
 		self::assertStringContainsString( 'data-order-key="key"', $html );
 	}
 
+	public function test_payment_ui_emits_release_state_for_checkoutless_attempt(): void {
+		$order = new \SQTWC_Test_Order( 99 );
+		$order->update_meta_data( '_sqtwc_current_attempt_id', 'att_1' );
+		$order->update_meta_data( '_sqtwc_device_id', 'dev_1' );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+
+		$html = Gateway::render_payment_ui( 99 );
+
+		self::assertStringContainsString( 'data-resume="1"', $html );
+		self::assertStringContainsString( 'data-checkout-id=""', $html );
+		self::assertStringContainsString( 'data-attempt-id="att_1"', $html );
+	}
+
 	public function test_payment_ui_omits_resume_when_order_is_paid(): void {
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_checkout_id', 'chk_open' );
