@@ -106,8 +106,7 @@ final class PaymentSweeper {
 	 * Seed the explicit index once from legacy lifecycle metadata.
 	 */
 	private function seed_legacy_index(): void {
-		// Sort the non-order marker after all timestamped work matched by the prefix query.
-		if ( ! add_option( self::RECONCILIATION_SEEDED_OPTION, self::RECONCILIATION_SEEDED_VALUE, '', 'no' ) ) {
+		if ( self::RECONCILIATION_SEEDED_VALUE === (string) get_option( self::RECONCILIATION_SEEDED_OPTION, '' ) ) {
 			return;
 		}
 
@@ -147,6 +146,12 @@ final class PaymentSweeper {
 
 			OrderMeta::index_order( $order_id );
 		}
+
+		// Mark completion only after every candidate is indexed: an interrupted
+		// seed retries on the next sweep (index_order is idempotent, so a
+		// concurrent double-seed is harmless). The marker value sorts after all
+		// timestamped work matched by the prefix discovery query.
+		update_option( self::RECONCILIATION_SEEDED_OPTION, self::RECONCILIATION_SEEDED_VALUE, false );
 	}
 
 	/**
