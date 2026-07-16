@@ -53,7 +53,24 @@ final class OrderLock {
 				return false;
 			}
 
-			delete_option( $option_name );
+			global $wpdb;
+			if ( ! is_object( $wpdb ) || ! isset( $wpdb->options ) || ! method_exists( $wpdb, 'query' ) || ! method_exists( $wpdb, 'prepare' ) ) {
+				return false;
+			}
+
+			try {
+				$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s", $option_name, $existing ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Atomic stale-lock takeover must match the observed owner value.
+			} catch ( Throwable $exception ) {
+				unset( $exception );
+
+				return false;
+			}
+			if ( 1 !== (int) $deleted ) {
+				return false;
+			}
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				wp_cache_delete( $option_name, 'options' );
+			}
 			if ( ! add_option( $option_name, $lock_value, '', 'no' ) ) {
 				return false;
 			}

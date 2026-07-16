@@ -4,6 +4,42 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
 
+final class OrderLockWpdb {
+	public string $options = 'wp_options';
+	public bool $replace_before_delete = false;
+	private array $prepared_args = array();
+
+	public function prepare( string $query, ...$args ): string {
+		$this->prepared_args = $args;
+
+		return $query;
+	}
+
+	public function get_var( string $query ) {
+		unset( $query );
+
+		return null;
+	}
+
+	public function query( string $query ): int {
+		unset( $query );
+		$option_name = (string) ( $this->prepared_args[0] ?? '' );
+		$lock_value  = (string) ( $this->prepared_args[1] ?? '' );
+		if ( $this->replace_before_delete ) {
+			$GLOBALS['sqtwc_options'][ $option_name ] = 'replacement-owner|' . time();
+			$this->replace_before_delete = false;
+		}
+
+		if ( (string) ( $GLOBALS['sqtwc_options'][ $option_name ] ?? '' ) !== $lock_value ) {
+			return 0;
+		}
+
+		unset( $GLOBALS['sqtwc_options'][ $option_name ] );
+
+		return 1;
+	}
+}
+
 final class OrderLockTest extends TestCase {
 	protected function setUp(): void {
 		unset( $GLOBALS['wpdb'] );
@@ -25,6 +61,7 @@ final class OrderLockTest extends TestCase {
 
 	public function test_add_option_fallback_takes_over_a_lock_stale_for_more_than_300_seconds(): void {
 		$created = time() - 301;
+		$GLOBALS['wpdb'] = new OrderLockWpdb();
 		$GLOBALS['sqtwc_options']['sqtwc_lock_99'] = 'old-owner|' . $created;
 		$lock = new OrderLock();
 
@@ -50,5 +87,15 @@ final class OrderLockTest extends TestCase {
 		$lock->release( 99 );
 
 		self::assertSame( $replacement, $GLOBALS['sqtwc_options']['sqtwc_lock_99'] );
+	}
+
+	public function test_stale_takeover_does_not_delete_a_replacement_lock(): void {
+		$wpdb = new OrderLockWpdb();
+		$wpdb->replace_before_delete = true;
+		$GLOBALS['wpdb'] = $wpdb;
+		$GLOBALS['sqtwc_options']['sqtwc_lock_99'] = 'expired-owner|' . ( time() - 301 );
+
+		self::assertFalse( ( new OrderLock() )->acquire( 99 ) );
+		self::assertStringStartsWith( 'replacement-owner|', $GLOBALS['sqtwc_options']['sqtwc_lock_99'] );
 	}
 }
