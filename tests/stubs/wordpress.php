@@ -35,3 +35,4 @@ if ( ! function_exists( 'rest_url' ) ) { function rest_url( $path = '' ) { retur
 if ( ! function_exists( 'wp_create_nonce' ) ) { function wp_create_nonce( $action = -1 ) { return 'nonce'; } }
 if ( ! function_exists( 'admin_url' ) ) { function admin_url( $path = '' ) { return 'https://wcpos.local/wp-admin/' . ltrim( $path, '/' ); } }
 if ( ! function_exists( 'wc_add_notice' ) ) { function wc_add_notice( $message, $type = 'notice' ) { $GLOBALS['sqtwc_notices'][] = array($type, $message); } }
+if ( ! function_exists( 'get_bloginfo' ) ) { function get_bloginfo( $show = '' ) { return 'Test Store'; } }

@@ -7,26 +7,36 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\WebhookSignatureVerifier;
 
 /**
  * Processes verified Square webhooks.
  */
 final class WebhookHandler {
-	/**
-	 * Signature verifier.
-	 *
-	 * @var WebhookSignatureVerifier|object
-	 */
+	/** @var WebhookSignatureVerifier|object */
 	private $verifier;
+
+	/** @var CheckoutReconciler|object */
+	private $reconciler;
 
 	/**
 	 * Constructor.
 	 *
-	 * @param WebhookSignatureVerifier|object|null $verifier Signature verifier.
+	 * @param WebhookSignatureVerifier|object|null $verifier   Signature verifier.
+	 * @param CheckoutReconciler|object|null       $reconciler Checkout reconciler.
 	 */
-	public function __construct( $verifier = null ) {
+	public function __construct( $verifier = null, $reconciler = null ) {
 		$this->verifier = $verifier ?? new WebhookSignatureVerifier();
+		if ( null === $reconciler ) {
+			$adapter    = new SquareTerminalAdapter( ( new SquareClientFactory() )->create() );
+			$reconciler = new CheckoutReconciler( $adapter );
+		}
+		$this->reconciler = $reconciler;
 	}
 
 	/**
@@ -43,7 +53,7 @@ final class WebhookHandler {
 		if ( ! $this->verifier->verify( $body, $signature, Settings::get_webhook_signature_key(), Settings::get_webhook_notification_url() ) ) {
 			return array(
 				'status' => 401,
-				'error'  => 'Invalid signature.',
+				'error'  => __( 'Invalid signature.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -51,7 +61,7 @@ final class WebhookHandler {
 		if ( ! is_array( $event ) ) {
 			return array(
 				'status' => 400,
-				'error'  => 'Invalid JSON.',
+				'error'  => __( 'Invalid JSON.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -67,7 +77,7 @@ final class WebhookHandler {
 		if ( ! preg_match( '/^woocommerce_order_(\d+)$/', $reference, $matches ) ) {
 			return array(
 				'status' => 400,
-				'error'  => 'Invalid reference_id.',
+				'error'  => __( 'Invalid reference_id.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -75,7 +85,7 @@ final class WebhookHandler {
 		if ( ! $order ) {
 			return array(
 				'status' => 404,
-				'error'  => 'Order not found.',
+				'error'  => __( 'Order not found.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
@@ -91,25 +101,37 @@ final class WebhookHandler {
 		}
 
 		if ( $event_id ) {
-			$processed[] = $event_id;
-			$order->update_meta_data( '_sqtwc_processed_event_ids', $processed );
+			OrderMeta::append_processed_event_id( $order, $event_id );
 		}
 
-		if ( 'COMPLETED' === ( $checkout['status'] ?? '' ) ) {
-			$payment_ids = (array) ( $checkout['payment_ids'] ?? array() );
-			$order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
-			$order->update_meta_data( '_sqtwc_checkout_idempotency_key', '' );
+		try {
+			$result = $this->reconciler->reconcile( $checkout, $order );
+		} catch ( Throwable $exception ) {
+			$order->update_meta_data( '_sqtwc_processed_event_ids', $processed );
+			$order->save();
+			Logger::error(
+				'Terminal checkout webhook reconciliation failed',
+				array(
+					'event_id'        => $event_id,
+					'exception_class' => get_class( $exception ),
+					'detail'          => $exception->getMessage(),
+				)
+			);
 
-			if ( ! $order->is_paid() ) {
-				$transaction_id = (string) ( $payment_ids[0] ?? '' );
-				$order->set_transaction_id( $transaction_id );
-				$order->payment_complete( $transaction_id );
-			}
-
-			Logger::info( 'Verified Square webhook completed Terminal checkout', array( 'event_id' => $event_id ), $order );
+			return array(
+				'status' => 500,
+				'error'  => __( 'Terminal checkout reconciliation failed.', 'square-terminal-for-woocommerce' ),
+			);
 		}
 
 		$order->save();
+
+		if ( empty( $result['applied'] ) ) {
+			return array(
+				'status' => 202,
+				'result' => 'ignored',
+			);
+		}
 
 		return array(
 			'status' => 200,

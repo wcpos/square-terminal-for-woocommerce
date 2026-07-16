@@ -20,6 +20,10 @@ final class Logger {
 		'signature',
 		'authorization',
 		'webhook_signature_key',
+		'signature_key',
+		'device_code',
+		'code',
+		'hmac',
 	);
 
 	/**
@@ -38,7 +42,13 @@ final class Logger {
 				continue;
 			}
 
-			$clean[ $key ] = is_array( $value ) ? self::sanitize_context( $value ) : $value;
+			if ( is_array( $value ) ) {
+				$clean[ $key ] = self::sanitize_context( $value );
+			} elseif ( is_string( $value ) && strlen( $value ) > 1000 ) {
+				$clean[ $key ] = substr( $value, 0, 1000 );
+			} else {
+				$clean[ $key ] = $value;
+			}
 		}
 
 		return $clean;

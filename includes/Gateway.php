@@ -67,6 +67,18 @@ class Gateway extends \WC_Payment_Gateway {
 				'title' => __( 'Location ID', 'square-terminal-for-woocommerce' ),
 				'type'  => 'text',
 			),
+			'skip_receipt_screen'      => array(
+				'title'   => __( 'Skip receipt screen', 'square-terminal-for-woocommerce' ),
+				'type'    => 'checkbox',
+				'label'   => __( 'Return the Terminal to idle without showing the receipt screen.', 'square-terminal-for-woocommerce' ),
+				'default' => 'no',
+			),
+			'collect_signature'        => array(
+				'title'   => __( 'Collect signature', 'square-terminal-for-woocommerce' ),
+				'type'    => 'checkbox',
+				'label'   => __( 'Ask the buyer for a signature on supported Terminal payments.', 'square-terminal-for-woocommerce' ),
+				'default' => 'no',
+			),
 			'webhook_signature_key'    => array(
 				'title' => __( 'Webhook Signature Key', 'square-terminal-for-woocommerce' ),
 				'type'  => 'password',

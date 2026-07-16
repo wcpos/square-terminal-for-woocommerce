@@ -7,26 +7,36 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Utils\CurrencyConverter;
 
 /**
  * Handles Square Terminal payment AJAX requests.
  */
 final class AjaxHandler {
-	/**
-	 * Square Terminal adapter.
-	 *
-	 * @var object
-	 */
+	/** @var object */
 	private $terminal_adapter;
+
+	/** @var CheckoutReconciler */
+	private CheckoutReconciler $reconciler;
+
+	/** @var SquareErrorMapper */
+	private SquareErrorMapper $error_mapper;
 
 	/**
 	 * Constructor.
 	 *
-	 * @param object $terminal_adapter Square Terminal adapter.
+	 * @param object                  $terminal_adapter Square Terminal adapter.
+	 * @param CheckoutReconciler|null $reconciler       Checkout reconciler.
+	 * @param SquareErrorMapper|null  $error_mapper     Square error mapper.
 	 */
-	public function __construct( $terminal_adapter ) {
+	public function __construct( $terminal_adapter, ?CheckoutReconciler $reconciler = null, ?SquareErrorMapper $error_mapper = null ) {
 		$this->terminal_adapter = $terminal_adapter;
+		$this->reconciler       = $reconciler ?? new CheckoutReconciler( $terminal_adapter );
+		$this->error_mapper     = $error_mapper ?? new SquareErrorMapper();
 	}
 
 	/**
@@ -36,63 +46,86 @@ final class AjaxHandler {
 	 * @return array<string,mixed>
 	 */
 	public function create_terminal_checkout( array $request ): array {
-		$order_id = absint( $request['order_id'] ?? 0 );
-		$order    = wc_get_order( $order_id );
-
-		if ( ! $order ) {
-			return array(
-				'status' => 404,
-				'error'  => 'Order not found.',
-			);
+		$authorized = $this->authorized_order( $request );
+		if ( isset( $authorized['error'] ) ) {
+			return $authorized['error'];
 		}
+		$order = $authorized['order'];
 
-		if ( $this->requires_nonce() && ! wp_verify_nonce( $request['_wpnonce'] ?? '', 'sqtwc_payment' ) ) {
-			return array(
-				'status' => 403,
-				'error'  => 'Invalid nonce.',
-			);
-		}
-
-		if ( ! OrderAccess::can_mutate_order( $order, $request ) ) {
-			return array(
-				'status' => 403,
-				'error'  => 'Order access denied.',
-			);
+		if ( $order->is_paid() ) {
+			return $this->error_response( 409, __( 'This order is already paid.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		$device_id = sanitize_text_field( $request['device_id'] ?? '' );
 		if ( '' === $device_id ) {
-			return array(
-				'status' => 400,
-				'error'  => 'Device ID is required.',
-			);
+			return $this->error_response( 400, __( 'Device ID is required.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		$current_checkout = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+		$current_attempt  = (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
+		$current_device   = (string) $order->get_meta( '_sqtwc_device_id', true );
+		if ( '' !== $current_checkout || ( '' !== $current_attempt && '' !== $current_device && $device_id !== $current_device ) ) {
+			return $this->error_response( 409, __( 'A Terminal payment attempt is already active for this order.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		$idempotency_key = (string) $order->get_meta( '_sqtwc_checkout_idempotency_key', true );
-		if ( '' === $idempotency_key ) {
+		if ( '' === $current_attempt || '' === $idempotency_key ) {
+			$current_attempt  = wp_generate_uuid4();
 			$idempotency_key = wp_generate_uuid4();
-			$order->update_meta_data( '_sqtwc_checkout_idempotency_key', $idempotency_key );
-			$order->save();
+			OrderMeta::start_attempt( $order, $current_attempt, $idempotency_key, $device_id );
 		}
 
-		$result = $this->terminal_adapter->create_checkout(
-			array(
-				'amount'          => CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ),
-				'currency'        => $order->get_currency(),
-				'device_id'       => $device_id,
-				'reference_id'    => 'woocommerce_order_' . $order_id,
-				'idempotency_key' => $idempotency_key,
-			)
+		$create_data = array(
+			'amount'              => CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ),
+			'currency'            => $order->get_currency(),
+			'device_id'           => $device_id,
+			'reference_id'        => 'woocommerce_order_' . $order->get_id(),
+			'idempotency_key'     => $idempotency_key,
+			'deadline_duration'   => 'PT5M',
+			'note'                => $this->checkout_note( $order ),
+			'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
+			'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
 		);
 
-		$order->update_meta_data( '_sqtwc_checkout_id', $result['id'] );
-		$payment_log   = $order->get_meta( '_sqtwc_payment_log', true );
-		$payment_log   = is_array( $payment_log ) ? $payment_log : array();
-		$payment_log[] = 'Terminal checkout created: ' . $result['id'];
-		$order->update_meta_data( '_sqtwc_payment_log', $payment_log );
+		$result = null;
+		for ( $attempt = 0; $attempt < 2; ++$attempt ) {
+			try {
+				$result = $this->terminal_adapter->create_checkout( $create_data );
+				break;
+			} catch ( Throwable $exception ) {
+				$mapped = $this->error_mapper->map( $exception );
+				Logger::error( 'Square Terminal checkout creation failed', $mapped['log_context'] );
+				if ( ! $mapped['retriable'] || 1 === $attempt ) {
+					OrderMeta::append_log( $order, 'error', $mapped['cashier_message'] );
+					$order->save();
+
+					return $this->mapped_error_response( $mapped );
+				}
+			}
+		}
+
+		if ( ! is_array( $result ) || empty( $result['id'] ) ) {
+			return $this->error_response( 502, __( 'Square did not return a Terminal checkout ID.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		$order->update_meta_data( '_sqtwc_checkout_id', (string) $result['id'] );
+		$order->update_meta_data( '_sqtwc_checkout_status', (string) ( $result['status'] ?? 'PENDING' ) );
+		if ( ! empty( $result['updated_at'] ) ) {
+			$order->update_meta_data( '_sqtwc_checkout_updated_at', (string) $result['updated_at'] );
+		}
+		OrderMeta::append_log( $order, 'info', __( 'Terminal checkout created.', 'square-terminal-for-woocommerce' ) );
 		$order->save();
 
-		Logger::info( 'Terminal checkout created', array( 'checkout_id' => $result['id'] ), $order );
+		Logger::info(
+			'Terminal checkout created',
+			array(
+				'order_id'    => $order->get_id(),
+				'attempt_id'  => $current_attempt,
+				'checkout_id' => $result['id'],
+				'device_id'   => $device_id,
+				'status'      => $result['status'] ?? 'PENDING',
+			)
+		);
 
 		return array(
 			'status'   => 200,
@@ -101,67 +134,325 @@ final class AjaxHandler {
 	}
 
 	/**
-	 * Cancel a Square Terminal checkout for a WooCommerce order.
+	 * Return the provider-verified or throttled cached Terminal status.
+	 *
+	 * @param array<string,mixed> $request Request data.
+	 * @return array<string,mixed>
+	 */
+	public function get_terminal_status( array $request ): array {
+		$authorized = $this->authorized_order( $request );
+		if ( isset( $authorized['error'] ) ) {
+			return $authorized['error'];
+		}
+		$order = $authorized['order'];
+
+		if ( $order->is_paid() ) {
+			return $this->with_redirect(
+				array(
+					'status'           => 'COMPLETED',
+					'cashier_message'  => CheckoutReconciler::cashier_message( 'COMPLETED' ),
+					'continue_polling' => false,
+				),
+				$order
+			);
+		}
+
+		$cached_status = (string) $order->get_meta( '_sqtwc_checkout_status', true );
+		$checkout_id   = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+		if ( in_array( $cached_status, array( 'COMPLETED', 'CANCELED' ), true ) || '' === $checkout_id ) {
+			return $this->cached_status_response( $order, $cached_status, $checkout_id );
+		}
+
+		$force        = '1' === (string) ( $request['force'] ?? '' );
+		$last_checked = (int) $order->get_meta( '_sqtwc_square_checked_at', true );
+		if ( ! $force && $last_checked > 0 && ( time() - $last_checked ) < 5 ) {
+			return $this->cached_status_response( $order, $cached_status, $checkout_id );
+		}
+
+		try {
+			$result = $this->fetch_and_reconcile( $order, $checkout_id );
+		} catch ( Throwable $exception ) {
+			return $this->fetch_error_response( $exception, $order );
+		}
+
+		return $this->with_redirect( $result, $order );
+	}
+
+	/**
+	 * Execute compare-before-cancel for an authorized AJAX request.
 	 *
 	 * @param array<string,mixed> $request Request data.
 	 * @return array<string,mixed>
 	 */
 	public function cancel_terminal_checkout( array $request ): array {
-		$order_id = absint( $request['order_id'] ?? 0 );
-		$order    = wc_get_order( $order_id );
+		$authorized = $this->authorized_order( $request );
+		if ( isset( $authorized['error'] ) ) {
+			return $authorized['error'];
+		}
 
-		if ( ! $order ) {
+		$identity_error = $this->validate_current_identity( $authorized['order'], $request );
+		if ( null !== $identity_error ) {
+			return $identity_error;
+		}
+
+		return $this->cancel_terminal_checkout_for_order(
+			$authorized['order'],
+			(string) $request['checkout_id'],
+			(string) $request['device_id']
+		);
+	}
+
+	/**
+	 * Execute compare-before-cancel for an already-authorized order.
+	 *
+	 * @param object              $order       WooCommerce order.
+	 * @param string              $checkout_id Square checkout ID.
+	 * @param string              $device_id   Square device ID.
+	 * @param array<string,mixed> $options     SDK request options.
+	 * @return array<string,mixed>
+	 */
+	public function cancel_terminal_checkout_for_order( $order, string $checkout_id, string $device_id, array $options = array() ): array {
+		if ( $checkout_id !== (string) $order->get_meta( '_sqtwc_checkout_id', true ) || $device_id !== (string) $order->get_meta( '_sqtwc_device_id', true ) ) {
+			return $this->error_response( 409, __( 'The Terminal checkout no longer matches this payment attempt.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		try {
+			$before = $this->fetch_and_reconcile( $order, $checkout_id, $options );
+		} catch ( Throwable $exception ) {
+			return $this->fetch_error_response( $exception, $order );
+		}
+
+		if ( in_array( $before['status'] ?? '', array( 'COMPLETED', 'CANCELED' ), true ) ) {
+			return $this->with_redirect( $before, $order );
+		}
+
+		$cancel_exception = null;
+		try {
+			$this->terminal_adapter->cancel_checkout( $checkout_id, $options );
+		} catch ( Throwable $exception ) {
+			$cancel_exception = $exception;
+			$mapped           = $this->error_mapper->map( $exception );
+			Logger::error( 'Terminal cancel request was inconclusive', $mapped['log_context'] );
+		}
+
+		try {
+			$after = $this->fetch_and_reconcile( $order, $checkout_id, $options );
+		} catch ( Throwable $exception ) {
+			$mapped = $this->error_mapper->map( $cancel_exception ?? $exception );
+
 			return array(
-				'status' => 404,
-				'error'  => 'Order not found.',
+				'status'           => (string) $order->get_meta( '_sqtwc_checkout_status', true ),
+				'cashier_message'  => __( 'Cancellation could not be confirmed. Keep checking the Terminal payment status.', 'square-terminal-for-woocommerce' ),
+				'continue_polling' => true,
+				'retriable'        => $mapped['retriable'],
 			);
+		}
+
+		return $this->with_redirect( $after, $order );
+	}
+
+	/**
+	 * Detach a stuck checkout from the current attempt without forgetting it.
+	 *
+	 * @param array<string,mixed> $request Request data.
+	 * @return array<string,mixed>
+	 */
+	public function detach_terminal_checkout( array $request ): array {
+		$authorized = $this->authorized_order( $request );
+		if ( isset( $authorized['error'] ) ) {
+			return $authorized['error'];
+		}
+		$order          = $authorized['order'];
+		$identity_error = $this->validate_current_identity( $order, $request );
+		if ( null !== $identity_error ) {
+			return $identity_error;
+		}
+
+		$checkout_id = (string) $request['checkout_id'];
+		$abandoned   = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
+		$abandoned   = is_array( $abandoned ) ? $abandoned : array();
+		if ( ! in_array( $checkout_id, $abandoned, true ) ) {
+			$abandoned[] = $checkout_id;
+		}
+		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $abandoned );
+		OrderMeta::close_current_attempt( $order, 'abandoned' );
+		$order->update_meta_data( '_sqtwc_checkout_status', '' );
+		$order->update_meta_data( '_sqtwc_checkout_updated_at', '' );
+		OrderMeta::append_log( $order, 'warning', __( 'Terminal checkout released. Its final Square status will still be reconciled.', 'square-terminal-for-woocommerce' ) );
+		$order->save();
+
+		return array(
+			'status'           => 'IDLE',
+			'cashier_message'  => __( 'Terminal payment released. You can start another payment.', 'square-terminal-for-woocommerce' ),
+			'continue_polling' => false,
+		);
+	}
+
+	/**
+	 * Fetch a checkout, update the throttle timestamp, and reconcile it.
+	 *
+	 * @param object              $order       WooCommerce order.
+	 * @param string              $checkout_id Square checkout ID.
+	 * @param array<string,mixed> $options     SDK request options.
+	 * @return array<string,mixed>
+	 */
+	private function fetch_and_reconcile( $order, string $checkout_id, array $options = array() ): array {
+		$order->update_meta_data( '_sqtwc_square_checked_at', time() );
+		$order->save();
+		$checkout = $this->terminal_adapter->get_checkout( $checkout_id, $options );
+
+		return $this->reconciler->reconcile( $checkout, $order, $options );
+	}
+
+	/**
+	 * Resolve and authorize an order using the unchanged OrderAccess model.
+	 *
+	 * @param array<string,mixed> $request Request data.
+	 * @return array<string,mixed>
+	 */
+	private function authorized_order( array $request ): array {
+		$order = wc_get_order( absint( $request['order_id'] ?? 0 ) );
+		if ( ! $order ) {
+			return array( 'error' => $this->error_response( 404, __( 'Order not found.', 'square-terminal-for-woocommerce' ) ) );
 		}
 
 		if ( $this->requires_nonce() && ! wp_verify_nonce( $request['_wpnonce'] ?? '', 'sqtwc_payment' ) ) {
-			return array(
-				'status' => 403,
-				'error'  => 'Invalid nonce.',
-			);
+			return array( 'error' => $this->error_response( 403, __( 'Invalid nonce.', 'square-terminal-for-woocommerce' ) ) );
 		}
 
 		if ( ! OrderAccess::can_mutate_order( $order, $request ) ) {
+			return array( 'error' => $this->error_response( 403, __( 'Order access denied.', 'square-terminal-for-woocommerce' ) ) );
+		}
+
+		return array( 'order' => $order );
+	}
+
+	/**
+	 * Verify compare-before-cancel/detach identity fields.
+	 *
+	 * @param object              $order   WooCommerce order.
+	 * @param array<string,mixed> $request Request data.
+	 * @return array<string,mixed>|null
+	 */
+	private function validate_current_identity( $order, array $request ): ?array {
+		$checkout_id = sanitize_text_field( $request['checkout_id'] ?? '' );
+		$device_id   = sanitize_text_field( $request['device_id'] ?? '' );
+		if ( '' === $checkout_id || '' === $device_id || $checkout_id !== (string) $order->get_meta( '_sqtwc_checkout_id', true ) || $device_id !== (string) $order->get_meta( '_sqtwc_device_id', true ) ) {
+			return $this->error_response( 409, __( 'The Terminal checkout no longer matches this payment attempt.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Build a cached lifecycle response.
+	 *
+	 * @param object $order         WooCommerce order.
+	 * @param string $cached_status Cached Square status.
+	 * @param string $checkout_id   Active checkout ID.
+	 * @return array<string,mixed>
+	 */
+	private function cached_status_response( $order, string $cached_status, string $checkout_id ): array {
+		if ( '' === $checkout_id && '' === $cached_status ) {
 			return array(
-				'status' => 403,
-				'error'  => 'Order access denied.',
+				'status'           => 'IDLE',
+				'cashier_message'  => __( 'No active Terminal payment.', 'square-terminal-for-woocommerce' ),
+				'continue_polling' => false,
 			);
 		}
 
-		$stored_id    = sanitize_text_field( (string) $order->get_meta( '_sqtwc_checkout_id', true ) );
-		$requested_id = sanitize_text_field( $request['checkout_id'] ?? '' );
-		if ( '' !== $requested_id && $requested_id !== $stored_id ) {
-			return array(
-				'status' => 400,
-				'error'  => 'Checkout ID does not match this order.',
-			);
-		}
+		$response_status = '' !== $cached_status ? $cached_status : 'PENDING';
 
-		$checkout_id = $stored_id;
-		if ( '' === $checkout_id ) {
-			return array(
-				'status' => 400,
-				'error'  => 'Checkout ID is required.',
-			);
-		}
+		return $this->with_redirect(
+			array(
+				'status'           => $response_status,
+				'cashier_message'  => CheckoutReconciler::cashier_message( $response_status ),
+				'continue_polling' => in_array( $cached_status, array( 'PENDING', 'IN_PROGRESS', 'CANCEL_REQUESTED' ), true ),
+			),
+			$order
+		);
+	}
 
-		$result = $this->terminal_adapter->cancel_checkout( $checkout_id );
-		$order->update_meta_data( '_sqtwc_checkout_idempotency_key', '' );
-		$payment_log   = $order->get_meta( '_sqtwc_payment_log', true );
-		$payment_log   = is_array( $payment_log ) ? $payment_log : array();
-		$payment_log[] = 'Terminal checkout canceled: ' . $checkout_id;
-		$order->update_meta_data( '_sqtwc_payment_log', $payment_log );
-		$order->save();
-
-		Logger::info( 'Terminal checkout canceled', array( 'checkout_id' => $checkout_id ), $order );
+	/**
+	 * Map a status-fetch exception without exposing provider detail.
+	 *
+	 * @param Throwable $exception Provider or transport exception.
+	 * @param object    $order     WooCommerce order.
+	 * @return array<string,mixed>
+	 */
+	private function fetch_error_response( Throwable $exception, $order ): array {
+		$mapped = $this->error_mapper->map( $exception );
+		Logger::error( 'Square Terminal status fetch failed', $mapped['log_context'] );
 
 		return array(
-			'status'   => 200,
-			'checkout' => $result,
+			'http_status'      => $mapped['retriable'] ? 502 : 400,
+			'status'           => (string) $order->get_meta( '_sqtwc_checkout_status', true ),
+			'cashier_message'  => $mapped['cashier_message'],
+			'continue_polling' => true,
+			'retriable'        => $mapped['retriable'],
+			'error_code'       => '' !== $mapped['log_context']['code'] ? $mapped['log_context']['code'] : 'square_error',
 		);
+	}
+
+	/**
+	 * Add a thank-you redirect when the order is paid.
+	 *
+	 * @param array<string,mixed> $response Lifecycle response.
+	 * @param object              $order    WooCommerce order.
+	 * @return array<string,mixed>
+	 */
+	private function with_redirect( array $response, $order ): array {
+		unset( $response['applied'], $response['reason'] );
+		if ( $order->is_paid() ) {
+			$response['redirect_url'] = $order->get_checkout_order_received_url();
+		}
+
+		return $response;
+	}
+
+	/**
+	 * Build a provider-safe mapped error response.
+	 *
+	 * @param array<string,mixed> $mapped Mapped Square error.
+	 * @return array<string,mixed>
+	 */
+	private function mapped_error_response( array $mapped ): array {
+		return array(
+			'status'           => $mapped['retriable'] ? 502 : 400,
+			'error_code'       => '' !== $mapped['log_context']['code'] ? $mapped['log_context']['code'] : 'square_error',
+			'cashier_message'  => $mapped['cashier_message'],
+			'retriable'        => $mapped['retriable'],
+			'continue_polling' => false,
+		);
+	}
+
+	/**
+	 * Build a translated local error response.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function error_response( int $status, string $message ): array {
+		return array(
+			'status'           => $status,
+			'cashier_message'  => $message,
+			'continue_polling' => false,
+		);
+	}
+
+	/**
+	 * Build the Square checkout note, capped at 500 characters.
+	 *
+	 * @param object $order WooCommerce order.
+	 */
+	private function checkout_note( $order ): string {
+		$note = sprintf(
+			/* translators: 1: store name, 2: WooCommerce order number. */
+			__( '%1$s — Order #%2$s', 'square-terminal-for-woocommerce' ),
+			get_bloginfo( 'name' ),
+			$order->get_order_number()
+		);
+
+		return mb_substr( $note, 0, 500 );
 	}
 
 	/**

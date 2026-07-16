@@ -7,6 +7,7 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 
@@ -14,6 +15,23 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
  * Main plugin class.
  */
 final class Plugin {
+	/** @var AjaxHandler|object|null */
+	private $ajax_handler;
+
+	/** @var WebhookHandler|object|null */
+	private $webhook_handler;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param AjaxHandler|object|null   $ajax_handler    Optional injected AJAX handler.
+	 * @param WebhookHandler|object|null $webhook_handler Optional injected webhook handler.
+	 */
+	public function __construct( $ajax_handler = null, $webhook_handler = null ) {
+		$this->ajax_handler    = $ajax_handler;
+		$this->webhook_handler = $webhook_handler;
+	}
+
 	/**
 	 * Register WordPress and WooCommerce hooks.
 	 */
@@ -21,8 +39,13 @@ final class Plugin {
 		add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 		add_action( 'wp_ajax_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
+		add_action( 'wp_ajax_sqtwc_get_terminal_status', array( $this, 'ajax_get_terminal_status' ) );
+		add_action( 'wp_ajax_nopriv_sqtwc_get_terminal_status', array( $this, 'ajax_get_terminal_status' ) );
 		add_action( 'wp_ajax_sqtwc_cancel_terminal_checkout', array( $this, 'ajax_cancel_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_cancel_terminal_checkout', array( $this, 'ajax_cancel_terminal_checkout' ) );
+		add_action( 'wp_ajax_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
+		add_action( 'wp_ajax_nopriv_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 	}
 
@@ -49,10 +72,72 @@ final class Plugin {
 	}
 
 	/**
+	 * Return Terminal checkout status from a WordPress AJAX request.
+	 */
+	public function ajax_get_terminal_status(): void {
+		$this->send_ajax_response( $this->create_ajax_handler()->get_terminal_status( $this->get_ajax_request_data() ) );
+	}
+
+	/**
 	 * Cancel a Terminal Checkout from a WordPress AJAX request.
 	 */
 	public function ajax_cancel_terminal_checkout(): void {
 		$this->send_ajax_response( $this->create_ajax_handler()->cancel_terminal_checkout( $this->get_ajax_request_data() ) );
+	}
+
+	/**
+	 * Detach a Terminal Checkout from a WordPress AJAX request.
+	 */
+	public function ajax_detach_terminal_checkout(): void {
+		$this->send_ajax_response( $this->create_ajax_handler()->detach_terminal_checkout( $this->get_ajax_request_data() ) );
+	}
+
+	/**
+	 * Best-effort cancel an open checkout when another path finalizes the order.
+	 *
+	 * @param int         $order_id Order ID.
+	 * @param string      $from     Previous order status.
+	 * @param string      $to       New order status.
+	 * @param object|null $order    WooCommerce order.
+	 */
+	public function cancel_open_attempt_on_order_status_change( $order_id, $from, $to, $order = null ): void {
+		unset( $from );
+		if ( ! in_array( $to, array( 'processing', 'completed', 'cancelled', 'failed' ), true ) ) {
+			return;
+		}
+
+		$order = $order ? $order : wc_get_order( $order_id );
+		if ( ! $order || '' === (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) ) {
+			return;
+		}
+
+		$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+		$device_id   = (string) $order->get_meta( '_sqtwc_device_id', true );
+		if ( '' === $checkout_id || '' === $device_id ) {
+			return;
+		}
+
+		try {
+			$this->create_ajax_handler()->cancel_terminal_checkout_for_order(
+				$order,
+				$checkout_id,
+				$device_id,
+				array(
+					'timeout'    => 8.0,
+					'maxRetries' => 0,
+				)
+			);
+		} catch ( Throwable $exception ) {
+			Logger::error(
+				'Order status transition Terminal cancel failed',
+				array(
+					'order_id'        => $order_id,
+					'checkout_id'     => $checkout_id,
+					'exception_class' => get_class( $exception ),
+					'detail'          => $exception->getMessage(),
+				)
+			);
+		}
 	}
 
 	/**
@@ -69,14 +154,31 @@ final class Plugin {
 			$headers['x-square-hmacsha256-signature'] = (string) $request->get_header( 'x-square-hmacsha256-signature' );
 		}
 
-		return $this->rest_response( ( new WebhookHandler() )->handle( $body, $headers ) );
+		return $this->rest_response( $this->create_webhook_handler()->handle( $body, $headers ) );
 	}
 
 	/**
 	 * Create the AJAX handler with a configured Square adapter.
 	 */
-	private function create_ajax_handler(): AjaxHandler {
-		return new AjaxHandler( new SquareTerminalAdapter( ( new SquareClientFactory() )->create() ) );
+	private function create_ajax_handler() {
+		if ( null === $this->ajax_handler ) {
+			$this->ajax_handler = new AjaxHandler( new SquareTerminalAdapter( ( new SquareClientFactory() )->create() ) );
+		}
+
+		return $this->ajax_handler;
+	}
+
+	/**
+	 * Create or return the configured webhook handler.
+	 *
+	 * @return WebhookHandler|object
+	 */
+	private function create_webhook_handler() {
+		if ( null === $this->webhook_handler ) {
+			$this->webhook_handler = new WebhookHandler();
+		}
+
+		return $this->webhook_handler;
 	}
 
 	/**
@@ -94,7 +196,8 @@ final class Plugin {
 	 * @param array<string,mixed> $response Response data.
 	 */
 	private function send_ajax_response( array $response ): void {
-		wp_send_json( $response, (int) ( $response['status'] ?? 200 ) );
+		$status = $response['http_status'] ?? ( is_int( $response['status'] ?? null ) ? $response['status'] : 200 );
+		wp_send_json( $response, (int) $status );
 	}
 
 	/**
