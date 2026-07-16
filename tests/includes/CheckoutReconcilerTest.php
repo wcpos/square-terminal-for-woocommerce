@@ -117,6 +117,37 @@ final class CheckoutReconcilerTest extends TestCase {
 		self::assertSame( array( 'pay_boundary' ), $order->get_meta( '_sqtwc_payment_ids' ) );
 	}
 
+	public function test_underpayment_places_order_on_hold_without_completing_payment(): void {
+		$order        = $this->open_order();
+		$order->total = '20.00';
+		$adapter      = new ReconcilerAdapter();
+		$adapter->payments['pay_under'] = array(
+			'id'             => 'pay_under',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1950,
+			'total_currency' => 'USD',
+			'tip_amount'     => 0,
+			'tip_currency'   => null,
+			'card_status'    => null,
+		);
+
+		( new CheckoutReconciler( $adapter ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_under' ),
+				'updated_at'   => '2026-07-16T10:00:03Z',
+			),
+			$order
+		);
+
+		self::assertFalse( $order->paid );
+		self::assertSame( 0, $order->payment_complete_calls );
+		self::assertSame( 'on-hold', $order->status );
+		self::assertStringContainsString( 'less than', $order->notes[0] );
+	}
+
 	public function test_abandoned_checkout_can_complete_after_current_attempt_changes(): void {
 		$order = $this->open_order();
 		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_abandoned' ) );
