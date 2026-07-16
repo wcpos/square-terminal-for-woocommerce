@@ -160,6 +160,26 @@ final class PaymentSweeperTest extends TestCase {
 		);
 	}
 
+	public function test_checkoutless_attempts_do_not_permanently_starve_newer_checkouts(): void {
+		for ( $order_id = 1; $order_id <= 25; ++$order_id ) {
+			$order = new \SQTWC_Test_Order( $order_id );
+			$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt_' . $order_id );
+			$GLOBALS['sqtwc_orders'][ $order_id ] = $order;
+			$GLOBALS['sqtwc_options'][ 'sqtwc_reconcile_' . $order_id ] = (string) $order_id;
+		}
+		$newer = new \SQTWC_Test_Order( 26 );
+		$newer->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_26' ) );
+		$GLOBALS['sqtwc_orders'][26] = $newer;
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_26'] = '26';
+		$adapter = new SweeperAdapter();
+		$sweeper = new PaymentSweeper( $adapter, new SweeperReconciler(), new OrderLock() );
+
+		$sweeper->sweep();
+		$sweeper->sweep();
+
+		self::assertSame( array( 'chk_26' ), $adapter->calls );
+	}
+
 	public function test_finalized_order_is_unindexed_and_empty_abandoned_meta_is_deleted(): void {
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt_current' );

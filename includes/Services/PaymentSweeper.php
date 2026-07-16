@@ -246,7 +246,7 @@ final class PaymentSweeper {
 
 		$abandoned = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
 		$abandoned = is_array( $abandoned ) ? array_filter( $abandoned ) : array();
-		if ( '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) || ! empty( $abandoned ) ) {
+		if ( '' !== (string) $order->get_meta( '_sqtwc_checkout_id', true ) || ! empty( $abandoned ) ) {
 			OrderMeta::index_order( $order_id );
 		} else {
 			OrderMeta::unindex_order( $order_id );
