@@ -153,7 +153,8 @@ final class CheckoutReconciler {
 		$recorded_tip       = (int) $order->get_meta( '_sqtwc_tip_amount', true );
 		$collected          = $recorded_collected + $new_collected;
 		$reported_tip       = $recorded_tip + $new_tip;
-		$cumulative_overcapture = $recorded_collected > 0 && ! empty( $recorded_payment_ids ) && ! empty( $new_payment_ids ) && ( $collected - $requested ) > $reported_tip;
+		$contributing_payment_count  = count( $new_payment_ids ) + ( $recorded_collected > 0 ? 1 : 0 );
+		$cumulative_overcapture      = $contributing_payment_count > 1 && ( $collected - $requested ) > $reported_tip;
 		$tip                = $cumulative_overcapture ? $reported_tip : max( $reported_tip, $collected - $requested, 0 );
 		$merged_payment_ids = array_values( array_unique( array_merge( $recorded_payment_ids, $payment_ids ) ) );
 

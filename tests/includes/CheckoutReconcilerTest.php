@@ -252,6 +252,45 @@ final class CheckoutReconcilerTest extends TestCase {
 		self::assertContains( '⚠ Square Terminal captured more than the order total across multiple checkouts. Payment IDs: pay_partial, pay_full. Refund may be required.', $order->notes );
 	}
 
+	public function test_cumulative_overcapture_from_multiple_new_payments_is_flagged_as_an_additional_capture(): void {
+		$order   = $this->open_order();
+		$adapter = new ReconcilerAdapter();
+		$adapter->payments['pay_partial'] = array(
+			'id'             => 'pay_partial',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1000,
+			'total_currency' => 'USD',
+			'tip_amount'     => 0,
+			'tip_currency'   => null,
+			'card_status'    => null,
+		);
+		$adapter->payments['pay_full'] = array(
+			'id'             => 'pay_full',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1234,
+			'total_currency' => 'USD',
+			'tip_amount'     => 0,
+			'tip_currency'   => null,
+			'card_status'    => null,
+		);
+
+		$result = ( new CheckoutReconciler( $adapter ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_partial', 'pay_full' ),
+			),
+			$order
+		);
+
+		self::assertTrue( $order->paid );
+		self::assertSame( 0, $order->get_meta( '_sqtwc_tip_amount' ) );
+		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
+		self::assertStringContainsString( 'refund may be required', strtolower( $result['cashier_message'] ) );
+		self::assertContains( '⚠ Square Terminal captured more than the order total across multiple checkouts. Payment IDs: pay_partial, pay_full. Refund may be required.', $order->notes );
+	}
+
 	public function test_payment_log_is_structured_and_capped_at_one_hundred(): void {
 		$order = $this->open_order();
 		$log   = array();
