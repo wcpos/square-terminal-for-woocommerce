@@ -229,6 +229,29 @@ final class CheckoutReconcilerTest extends TestCase {
 		self::assertTrue( $order->paid );
 	}
 
+	public function test_cumulative_overcapture_across_checkouts_is_flagged_as_an_additional_capture(): void {
+		$order = $this->open_order();
+		$order->update_meta_data( '_sqtwc_payment_ids', array( 'pay_partial' ) );
+		$order->update_meta_data( '_sqtwc_collected_amount', 1000 );
+		$adapter = new ReconcilerAdapter();
+
+		$result = ( new CheckoutReconciler( $adapter ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_full' ),
+			),
+			$order
+		);
+
+		self::assertTrue( $order->paid );
+		self::assertSame( 246, $order->get_meta( '_sqtwc_tip_amount' ), 'Only the explicit Square tip is a tip; cumulative excess is an additional capture.' );
+		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
+		self::assertStringContainsString( 'refund may be required', strtolower( $result['cashier_message'] ) );
+		self::assertContains( '⚠ Square Terminal captured more than the order total across multiple checkouts. Payment IDs: pay_partial, pay_full. Refund may be required.', $order->notes );
+	}
+
 	public function test_payment_log_is_structured_and_capped_at_one_hundred(): void {
 		$order = $this->open_order();
 		$log   = array();
@@ -326,6 +349,10 @@ final class CheckoutReconcilerTest extends TestCase {
 	public function test_exact_amount_and_overage_complete_with_overage_as_tip(): void {
 		foreach ( array( 1234 => 0, 1480 => 246 ) as $collected => $expected_tip ) {
 			$order   = $this->open_order();
+			if ( 1480 === $collected ) {
+				$order->update_meta_data( '_sqtwc_payment_ids', array( 'pay_fully_refunded' ) );
+				$order->update_meta_data( '_sqtwc_collected_amount', 0 );
+			}
 			$adapter = new ReconcilerAdapter();
 			$adapter->payments['pay_amount'] = array(
 				'id'             => 'pay_amount',

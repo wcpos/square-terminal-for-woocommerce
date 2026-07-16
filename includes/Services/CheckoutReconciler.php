@@ -152,7 +152,9 @@ final class CheckoutReconciler {
 		$recorded_collected = (int) $order->get_meta( '_sqtwc_collected_amount', true );
 		$recorded_tip       = (int) $order->get_meta( '_sqtwc_tip_amount', true );
 		$collected          = $recorded_collected + $new_collected;
-		$tip                = max( $recorded_tip + $new_tip, $collected - $requested, 0 );
+		$reported_tip       = $recorded_tip + $new_tip;
+		$cumulative_overcapture = $recorded_collected > 0 && ! empty( $recorded_payment_ids ) && ! empty( $new_payment_ids ) && ( $collected - $requested ) > $reported_tip;
+		$tip                = $cumulative_overcapture ? $reported_tip : max( $reported_tip, $collected - $requested, 0 );
 		$merged_payment_ids = array_values( array_unique( array_merge( $recorded_payment_ids, $payment_ids ) ) );
 
 		if ( $order->is_paid() && ! empty( array_diff( $payment_ids, $recorded_payment_ids ) ) ) {
@@ -199,6 +201,19 @@ final class CheckoutReconciler {
 		$order->update_meta_data( '_sqtwc_payment_ids', $merged_payment_ids );
 		$order->update_meta_data( '_sqtwc_collected_amount', $collected );
 		$order->update_meta_data( '_sqtwc_tip_amount', $tip );
+		if ( $cumulative_overcapture ) {
+			$duplicate_ids  = $order->get_meta( '_sqtwc_duplicate_payment_ids', true );
+			$duplicate_ids  = is_array( $duplicate_ids ) ? $duplicate_ids : array();
+			$duplicate_ids  = array_values( array_unique( array_merge( $duplicate_ids, $merged_payment_ids ) ) );
+			$order->update_meta_data( '_sqtwc_duplicate_payment_ids', $duplicate_ids );
+			$order->add_order_note(
+				sprintf(
+				/* translators: %s: comma-separated Square payment IDs. */
+					__( '⚠ Square Terminal captured more than the order total across multiple checkouts. Payment IDs: %s. Refund may be required.', 'square-terminal-for-woocommerce' ),
+					implode( ', ', $merged_payment_ids )
+				)
+			);
+		}
 
 		if ( ! $is_abandoned ) {
 			$this->cache_state( $checkout, $order );
@@ -247,8 +262,10 @@ final class CheckoutReconciler {
 			$order->payment_complete( (string) ( $new_payment_ids[0] ?? $merged_payment_ids[0] ?? '' ) );
 		}
 
-		$message = self::cashier_message( 'COMPLETED' );
-		OrderMeta::append_log( $order, 'success', $message );
+		$message = $cumulative_overcapture
+			? __( 'Square captured an additional payment. A refund may be required — check the order notes.', 'square-terminal-for-woocommerce' )
+			: self::cashier_message( 'COMPLETED' );
+		OrderMeta::append_log( $order, $cumulative_overcapture ? 'error' : 'success', $message );
 		$order->save();
 		Logger::info( 'Terminal checkout completed', $this->log_context( $checkout, $order ) );
 
