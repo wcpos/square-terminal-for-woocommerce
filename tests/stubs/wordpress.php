@@ -20,6 +20,7 @@ if ( ! function_exists( 'plugin_dir_url' ) ) { function plugin_dir_url( $file ) 
 if ( ! function_exists( 'trailingslashit' ) ) { function trailingslashit( $path ) { return rtrim( $path, '/\\' ) . '/'; } }
 if ( ! function_exists( 'add_action' ) ) { function add_action( $hook, $callback, $priority = 10, $args = 1 ) { $GLOBALS['sqtwc_actions'][$hook][] = $callback; return true; } }
 if ( ! function_exists( 'add_filter' ) ) { function add_filter( $hook, $callback, $priority = 10, $args = 1 ) { $GLOBALS['sqtwc_filters'][$hook][] = $callback; return true; } }
+if ( ! function_exists( 'apply_filters' ) ) { function apply_filters( $hook, $value ) { return $value; } }
 if ( ! function_exists( 'register_rest_route' ) ) { function register_rest_route( $namespace, $route, $args = array() ) { $GLOBALS['sqtwc_rest_routes'][$namespace . $route] = $args; return true; } }
 if ( ! function_exists( 'register_activation_hook' ) ) { function register_activation_hook( $file, $callback ) { $GLOBALS['sqtwc_activation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'get_option' ) ) { function get_option( $key, $default = false ) { $GLOBALS['sqtwc_get_option_count'][$key] = ($GLOBALS['sqtwc_get_option_count'][$key] ?? 0) + 1; return $GLOBALS['sqtwc_options'][$key] ?? $default; } }
