@@ -144,7 +144,9 @@ final class PaymentSweeper {
 				continue;
 			}
 
-			OrderMeta::index_order( $order_id );
+			if ( ! OrderMeta::index_order( $order_id ) ) {
+				return;
+			}
 		}
 		// Mark completion only after every candidate is indexed: an interrupted
 		// seed retries on the next sweep (index_order is idempotent, so a

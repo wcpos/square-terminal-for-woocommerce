@@ -285,6 +285,8 @@
 
 		function failCreate(res) {
 			state.detachAvailable = !!(res.body && res.body.detach_available);
+			state.attemptId = (res.body && res.body.attempt_id) || state.attemptId;
+			state.deviceId = (res.body && res.body.device_id) || state.deviceId;
 			setState(STATES.FINAL);
 			setStatus(errorMessage(res), 'error', false);
 			log('error', 'Create failed: ' + errorMessage(res));
@@ -349,6 +351,7 @@
 
 			request(actions.detach, {
 				checkout_id: state.checkoutId,
+				attempt_id: state.attemptId,
 				device_id: state.deviceId
 			}).then(function (res) {
 				if (!res.ok) {

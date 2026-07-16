@@ -377,7 +377,23 @@ final class AjaxHandlerTest extends TestCase {
 
 		self::assertSame( 409, $result['status'] );
 		self::assertSame( 'Retry on the original terminal or release the payment first.', $result['cashier_message'] );
+		self::assertTrue( $result['detach_available'] );
+		self::assertSame( 'attempt_current', $result['attempt_id'] );
+		self::assertSame( 'device_current', $result['device_id'] );
 		self::assertSame( 0, $adapter->creates );
+	}
+
+	public function test_resume_without_saved_request_exposes_matching_release_identity(): void {
+		$order = $this->checkoutless_order();
+		$order->delete_meta_data( '_sqtwc_attempt_request' );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+
+		$result = ( new AjaxHandler( new LifecycleAdapter() ) )->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_current', 'order_key' => 'key' ) );
+
+		self::assertSame( 409, $result['status'] );
+		self::assertTrue( $result['detach_available'] );
+		self::assertSame( 'attempt_current', $result['attempt_id'] );
+		self::assertSame( 'device_current', $result['device_id'] );
 	}
 
 	public function test_idempotency_key_reused_create_failure_returns_conflict_and_keeps_attempt(): void {
@@ -519,6 +535,7 @@ final class AjaxHandlerTest extends TestCase {
 		$adapter                     = new LifecycleAdapter();
 		$request                     = $this->cancel_request();
 		$request['checkout_id']      = '';
+		$request['attempt_id']       = 'attempt_current';
 
 		$result = ( new AjaxHandler( $adapter ) )->detach_terminal_checkout( $request );
 
@@ -530,6 +547,20 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 0, $adapter->gets );
 		self::assertSame( 0, $adapter->cancels );
 		self::assertSame( 0, $adapter->payment_gets );
+	}
+
+	public function test_checkoutless_detach_rejects_a_stale_attempt_identity(): void {
+		$order                       = $this->checkoutless_order();
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$request                     = $this->cancel_request();
+		$request['checkout_id']      = '';
+		$request['attempt_id']       = 'attempt_stale';
+
+		$result = ( new AjaxHandler( new LifecycleAdapter() ) )->detach_terminal_checkout( $request );
+
+		self::assertSame( 409, $result['status'] );
+		self::assertSame( 'attempt_current', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertEmpty( $order->get_meta( '_sqtwc_attempt_history', true ) );
 	}
 
 	private function open_order(): \SQTWC_Test_Order {

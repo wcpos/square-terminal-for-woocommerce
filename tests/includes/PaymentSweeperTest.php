@@ -79,6 +79,7 @@ final class PaymentSweeperTest extends TestCase {
 		$GLOBALS['sqtwc_order_query_results'] = array();
 		$GLOBALS['sqtwc_wc_get_orders_args'] = array();
 		$GLOBALS['sqtwc_options']            = array( 'sqtwc_reconcile_seeded' => '18446744073709551615' );
+		$GLOBALS['sqtwc_add_option_failures'] = array();
 		unset( $GLOBALS['sqtwc_wc_get_orders_callback'] );
 	}
 
@@ -231,6 +232,17 @@ final class PaymentSweeperTest extends TestCase {
 		}
 
 		self::assertArrayNotHasKey( 'sqtwc_reconcile_seeded', $GLOBALS['sqtwc_options'] );
+	}
+
+	public function test_legacy_seed_is_not_marked_when_an_order_cannot_be_indexed(): void {
+		$GLOBALS['sqtwc_options'] = array();
+		$GLOBALS['sqtwc_order_query_results'] = array( new \SQTWC_Test_Order( 99 ) );
+		$GLOBALS['sqtwc_add_option_failures']['sqtwc_reconcile_99'] = true;
+
+		( new PaymentSweeper( new SweeperAdapter(), new SweeperReconciler(), new OrderLock() ) )->sweep();
+
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_seeded', $GLOBALS['sqtwc_options'] );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
 	public function test_index_order_preserves_the_oldest_work_timestamp_and_unindex_deletes_the_order_option(): void {

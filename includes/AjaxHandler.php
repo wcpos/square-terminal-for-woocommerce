@@ -119,13 +119,23 @@ final class AjaxHandler {
 		$idempotency_key = (string) $order->get_meta( '_sqtwc_checkout_idempotency_key', true );
 		if ( '' !== $current_attempt ) {
 			if ( $device_id !== $current_device ) {
-				return $this->error_response( 409, __( 'Retry on the original terminal or release the payment first.', 'square-terminal-for-woocommerce' ) );
+				$response = $this->error_response( 409, __( 'Retry on the original terminal or release the payment first.', 'square-terminal-for-woocommerce' ) );
+				$response['detach_available'] = true;
+				$response['attempt_id']       = $current_attempt;
+				$response['device_id']        = $current_device;
+
+				return $response;
 			}
 
 			$device_id = $current_device;
 			$create_data = $order->get_meta( '_sqtwc_attempt_request', true );
 			if ( ! is_array( $create_data ) || empty( $create_data ) ) {
-				return $this->error_response( 409, __( 'The saved Terminal payment request is unavailable. Release the payment and start again.', 'square-terminal-for-woocommerce' ) );
+				$response = $this->error_response( 409, __( 'The saved Terminal payment request is unavailable. Release the payment and start again.', 'square-terminal-for-woocommerce' ) );
+				$response['detach_available'] = true;
+				$response['attempt_id']       = $current_attempt;
+				$response['device_id']        = $current_device;
+
+				return $response;
 			}
 		} else {
 			$current_attempt  = wp_generate_uuid4();
@@ -164,6 +174,10 @@ final class AjaxHandler {
 
 					$response = $this->mapped_error_response( $mapped );
 					$response['detach_available'] = '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
+					if ( $response['detach_available'] ) {
+						$response['attempt_id'] = $current_attempt;
+						$response['device_id']  = '' !== $current_device ? $current_device : $device_id;
+					}
 
 					return $response;
 				}
@@ -180,6 +194,8 @@ final class AjaxHandler {
 
 			$response = $this->error_response( 502, __( 'Square did not confirm the Terminal checkout. Retry to check, or release the payment.', 'square-terminal-for-woocommerce' ) );
 			$response['detach_available'] = true;
+			$response['attempt_id']       = $current_attempt;
+			$response['device_id']        = '' !== $current_device ? $current_device : $device_id;
 
 			return $response;
 		}
@@ -359,8 +375,10 @@ final class AjaxHandler {
 				$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 				if ( '' === $checkout_id ) {
 					$posted_device = sanitize_text_field( $request['device_id'] ?? '' );
+					$posted_attempt = sanitize_text_field( $request['attempt_id'] ?? '' );
 					$stored_device = (string) $order->get_meta( '_sqtwc_device_id', true );
-					$identity_error = '' === $posted_device || $posted_device !== $stored_device
+					$stored_attempt = (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
+					$identity_error = '' === $posted_device || $posted_device !== $stored_device || '' === $posted_attempt || $posted_attempt !== $stored_attempt
 						? $this->error_response( 409, __( 'The Terminal checkout no longer matches this payment attempt.', 'square-terminal-for-woocommerce' ) )
 						: null;
 				} else {

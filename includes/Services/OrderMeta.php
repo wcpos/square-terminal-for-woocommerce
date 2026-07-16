@@ -110,13 +110,15 @@ final class OrderMeta {
 	/**
 	 * Add an order to the pending reconciliation index, preserving its oldest timestamp.
 	 */
-	public static function index_order( int $order_id ): void {
+	public static function index_order( int $order_id ): bool {
 		$order_id = absint( $order_id );
 		if ( $order_id <= 0 ) {
-			return;
+			return false;
 		}
 
-		add_option( self::RECONCILIATION_OPTION_PREFIX . $order_id, (string) time(), '', 'no' );
+		$option_name = self::RECONCILIATION_OPTION_PREFIX . $order_id;
+
+		return add_option( $option_name, (string) time(), '', 'no' ) || false !== get_option( $option_name, false );
 	}
 
 	/**

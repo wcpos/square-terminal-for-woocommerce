@@ -111,7 +111,13 @@ test('retained checkoutless create failure exposes release', async () => {
 	ctx.els.select.value = 'dev_success';
 	ctx.controller.start();
 	await flush();
-	ctx.fetch.settle({ status: 502, cashier_message: 'Create unconfirmed.', detach_available: true });
+	ctx.fetch.settle({
+		status: 502,
+		cashier_message: 'Create unconfirmed.',
+		detach_available: true,
+		attempt_id: 'att_open',
+		device_id: 'dev_success'
+	});
 	await flush();
 
 	assert.equal(ctx.controller.state.name, payment.STATES.FINAL);
@@ -122,6 +128,8 @@ test('retained checkoutless create failure exposes release', async () => {
 	await flush();
 	assert.equal(ctx.fetch.lastCall().action, 'sqtwc_detach_terminal_checkout');
 	assert.equal(Object.hasOwn(ctx.fetch.lastCall().params, 'checkout_id'), false);
+	assert.equal(ctx.fetch.lastCall().params.attempt_id, 'att_open');
+	assert.equal(ctx.fetch.lastCall().params.device_id, 'dev_success');
 });
 
 test('checkoutless reload exposes release without polling', async () => {
@@ -133,6 +141,10 @@ test('checkoutless reload exposes release without polling', async () => {
 	assert.equal(ctx.controller.state.detachAvailable, true);
 	assert.equal(hidden(ctx.els.detach), false);
 	assert.equal(ctx.fetch.callCount(), 0);
+
+	ctx.controller.detach();
+	await flush();
+	assert.equal(ctx.fetch.lastCall().params.attempt_id, 'att_open');
 });
 
 test('cancel that resolves COMPLETED redirects instead of showing cancelled', async () => {

@@ -26,7 +26,7 @@ if ( ! function_exists( 'register_rest_route' ) ) { function register_rest_route
 if ( ! function_exists( 'register_activation_hook' ) ) { function register_activation_hook( $file, $callback ) { $GLOBALS['sqtwc_activation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'register_deactivation_hook' ) ) { function register_deactivation_hook( $file, $callback ) { $GLOBALS['sqtwc_deactivation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'get_option' ) ) { function get_option( $key, $default = false ) { $GLOBALS['sqtwc_get_option_count'][$key] = ($GLOBALS['sqtwc_get_option_count'][$key] ?? 0) + 1; return $GLOBALS['sqtwc_options'][$key] ?? $default; } }
-if ( ! function_exists( 'add_option' ) ) { function add_option( $key, $value, $deprecated = '', $autoload = 'yes' ) { if ( array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
+if ( ! function_exists( 'add_option' ) ) { function add_option( $key, $value, $deprecated = '', $autoload = 'yes' ) { if ( ! empty( $GLOBALS['sqtwc_add_option_failures'][$key] ) || array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
 if ( ! function_exists( 'delete_option' ) ) { function delete_option( $key ) { if ( ! array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } unset( $GLOBALS['sqtwc_options'][$key] ); return true; } }
 if ( ! function_exists( 'update_option' ) ) { function update_option( $key, $value ) { $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
 if ( ! function_exists( 'is_user_logged_in' ) ) { function is_user_logged_in() { return $GLOBALS['sqtwc_is_user_logged_in'] ?? false; } }
