@@ -80,8 +80,17 @@ final class AjaxHandler {
 		}
 
 		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
-		if ( (int) $order->get_meta( '_sqtwc_collected_amount', true ) > 0 || ( is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids ) ) ) {
-			$fully_refunded = is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids );
+		$duplicate_payment_ids = $order->get_meta( '_sqtwc_duplicate_payment_ids', true );
+		$recorded_payment_ids = array_values(
+			array_unique(
+				array_merge(
+					is_array( $recorded_payment_ids ) ? $recorded_payment_ids : array(),
+					is_array( $duplicate_payment_ids ) ? $duplicate_payment_ids : array()
+				)
+			)
+		);
+		if ( (int) $order->get_meta( '_sqtwc_collected_amount', true ) > 0 || ! empty( $recorded_payment_ids ) ) {
+			$fully_refunded = ! empty( $recorded_payment_ids );
 			foreach ( $fully_refunded ? $recorded_payment_ids : array() as $payment_id ) {
 				try {
 					$payment = $this->terminal_adapter->get_payment( (string) $payment_id );
