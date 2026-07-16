@@ -142,18 +142,21 @@ final class SquareTerminalAdapter {
 	 * @return array<string,mixed>
 	 */
 	private function normalize_payment( ?Payment $payment ): array {
-		$total = $payment ? $payment->getTotalMoney() : null;
-		$tip   = $payment ? $payment->getTipMoney() : null;
-		$card  = $payment ? $payment->getCardDetails() : null;
+		$total    = $payment ? $payment->getTotalMoney() : null;
+		$tip      = $payment ? $payment->getTipMoney() : null;
+		$refunded = $payment ? $payment->getRefundedMoney() : null;
+		$card     = $payment ? $payment->getCardDetails() : null;
 
 		return array(
-			'id'             => $payment ? $payment->getId() : null,
-			'status'         => $payment ? $payment->getStatus() : null,
-			'total_amount'   => $total ? $total->getAmount() : null,
-			'total_currency' => $total ? $total->getCurrency() : null,
-			'tip_amount'     => $tip ? $tip->getAmount() : 0,
-			'tip_currency'   => $tip ? $tip->getCurrency() : null,
-			'card_status'    => $card ? $card->getStatus() : null,
+			'id'                => $payment ? $payment->getId() : null,
+			'status'            => $payment ? $payment->getStatus() : null,
+			'total_amount'      => $total ? $total->getAmount() : null,
+			'total_currency'    => $total ? $total->getCurrency() : null,
+			'tip_amount'        => $tip ? $tip->getAmount() : 0,
+			'tip_currency'      => $tip ? $tip->getCurrency() : null,
+			'refunded_amount'   => $refunded ? $refunded->getAmount() : 0,
+			'refunded_currency' => $refunded ? $refunded->getCurrency() : null,
+			'card_status'       => $card ? $card->getStatus() : null,
 		);
 	}
 }

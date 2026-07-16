@@ -81,7 +81,32 @@ final class AjaxHandler {
 
 		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
 		if ( (int) $order->get_meta( '_sqtwc_collected_amount', true ) > 0 || ( is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids ) ) ) {
-			return $this->error_response( 409, __( 'Square already captured a partial payment for this order. Resolve it in Square Dashboard (refund or complete manually) before starting another Terminal payment.', 'square-terminal-for-woocommerce' ) );
+			$fully_refunded = is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids );
+			foreach ( $fully_refunded ? $recorded_payment_ids : array() as $payment_id ) {
+				try {
+					$payment = $this->terminal_adapter->get_payment( (string) $payment_id );
+				} catch ( Throwable $exception ) {
+					unset( $exception );
+					$fully_refunded = false;
+					break;
+				}
+
+				$total_currency    = (string) ( $payment['total_currency'] ?? '' );
+				$refunded_currency = (string) ( $payment['refunded_currency'] ?? '' );
+				if ( (int) ( $payment['total_amount'] ?? 0 ) <= 0 || (int) ( $payment['refunded_amount'] ?? 0 ) < (int) $payment['total_amount'] || $order->get_currency() !== $total_currency || $total_currency !== $refunded_currency ) {
+					$fully_refunded = false;
+					break;
+				}
+			}
+
+			if ( ! $fully_refunded ) {
+				return $this->error_response( 409, __( 'Square already captured a partial payment for this order. Resolve it in Square Dashboard (refund or complete manually) before starting another Terminal payment.', 'square-terminal-for-woocommerce' ) );
+			}
+
+			$order->update_meta_data( '_sqtwc_collected_amount', 0 );
+			$order->update_meta_data( '_sqtwc_tip_amount', 0 );
+			$order->add_order_note( __( 'Square confirmed the recorded Terminal payment was fully refunded.', 'square-terminal-for-woocommerce' ) );
+			$order->save();
 		}
 
 		$current_checkout = (string) $order->get_meta( '_sqtwc_checkout_id', true );

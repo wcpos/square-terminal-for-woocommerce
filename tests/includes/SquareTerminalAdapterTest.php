@@ -46,10 +46,11 @@ final class SpyPaymentsClient {
 			array(
 				'payment' => new Payment(
 					array(
-						'id'         => 'pay_1',
-						'status'     => 'COMPLETED',
-						'totalMoney' => new Money( array( 'amount' => 1480, 'currency' => 'USD' ) ),
-						'tipMoney'   => new Money( array( 'amount' => 246, 'currency' => 'USD' ) ),
+						'id'            => 'pay_1',
+						'status'        => 'COMPLETED',
+						'totalMoney'    => new Money( array( 'amount' => 1480, 'currency' => 'USD' ) ),
+						'tipMoney'      => new Money( array( 'amount' => 246, 'currency' => 'USD' ) ),
+						'refundedMoney' => new Money( array( 'amount' => 1480, 'currency' => 'USD' ) ),
 					)
 				),
 			)
@@ -114,13 +115,15 @@ final class SquareTerminalAdapterTest extends TestCase {
 		self::assertSame( 'pay_1', $payments->get_request->getPaymentId() );
 		self::assertSame(
 			array(
-				'id'             => 'pay_1',
-				'status'         => 'COMPLETED',
-				'total_amount'   => 1480,
-				'total_currency' => 'USD',
-				'tip_amount'     => 246,
-				'tip_currency'   => 'USD',
-				'card_status'    => null,
+				'id'                => 'pay_1',
+				'status'            => 'COMPLETED',
+				'total_amount'      => 1480,
+				'total_currency'    => 'USD',
+				'tip_amount'        => 246,
+				'tip_currency'      => 'USD',
+				'refunded_amount'   => 1480,
+				'refunded_currency' => 'USD',
+				'card_status'       => null,
 			),
 			$result
 		);

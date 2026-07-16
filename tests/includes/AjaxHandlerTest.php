@@ -163,6 +163,31 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 0, $adapter->creates );
 	}
 
+	public function test_create_allows_retry_after_recorded_payment_is_fully_refunded(): void {
+		$order = new \SQTWC_Test_Order( 99 );
+		$order->update_meta_data( '_sqtwc_collected_amount', 500 );
+		$order->update_meta_data( '_sqtwc_tip_amount', 25 );
+		$order->update_meta_data( '_sqtwc_payment_ids', array( 'pay_partial' ) );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter = new LifecycleAdapter();
+		$adapter->payments['pay_partial'] = array(
+			'id'                => 'pay_partial',
+			'status'            => 'COMPLETED',
+			'total_amount'      => 500,
+			'total_currency'    => 'USD',
+			'refunded_amount'   => 500,
+			'refunded_currency' => 'USD',
+		);
+
+		$result = ( new AjaxHandler( $adapter ) )->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'D', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $result['status'] );
+		self::assertSame( 1, $adapter->payment_gets );
+		self::assertSame( 0, $order->get_meta( '_sqtwc_collected_amount' ) );
+		self::assertSame( 0, $order->get_meta( '_sqtwc_tip_amount' ) );
+		self::assertSame( array( 'pay_partial' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+	}
+
 	public function test_create_recomputes_amount_persists_attempt_and_retries_once_with_same_key(): void {
 		$order                       = new \SQTWC_Test_Order( 99 );
 		$order->total                = '19.87';
