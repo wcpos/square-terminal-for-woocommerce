@@ -106,6 +106,9 @@ final class AjaxHandler {
 		}
 
 		if ( ! is_array( $result ) || empty( $result['id'] ) ) {
+			OrderMeta::close_current_attempt( $order, 'FAILED' );
+			$order->save();
+
 			return $this->error_response( 502, __( 'Square did not return a Terminal checkout ID.', 'square-terminal-for-woocommerce' ) );
 		}
 
