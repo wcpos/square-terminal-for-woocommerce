@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Check if release is needed
+        id: check_release
+        run: |
+          set -euo pipefail
+
+          VERSION=$(grep -oP "Version:\s*\K\d+(\.\d+)*" square-terminal-for-woocommerce.php)
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Invalid version format: $VERSION"
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          git fetch --prune --tags
+
+          if ! git tag | grep -qx "v$VERSION"; then
+            echo "Version has changed. Creating new release..."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! gh release view "v$VERSION" --json assets --jq '.assets[].name' | grep -qx 'square-terminal-for-woocommerce.zip'; then
+            echo "Release exists without ZIP asset. Rebuilding and uploading asset..."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Version has not changed and ZIP asset already exists. Skipping release..."
+          echo "release=false" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup PHP
+        if: steps.check_release.outputs.release == 'true'
+        uses: shivammathur/setup-php@bf6b4fbd49ca58e4608c9c89fba0b8d90bd2a39f # v2.35.5
+        with:
+          php-version: '8.1'
+          coverage: none
+
+      - name: Install composer dependencies
+        if: steps.check_release.outputs.release == 'true'
+        run: composer install --no-dev --prefer-dist --no-progress
+
+      - name: Build scoped vendor
+        if: steps.check_release.outputs.release == 'true'
+        run: composer run build:scoped-vendor
+
+      - name: Build ZIP
+        if: steps.check_release.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+
+          STAGE=$(mktemp -d)/square-terminal-for-woocommerce
+          mkdir -p "$STAGE"
+          cp square-terminal-for-woocommerce.php readme.txt "$STAGE/"
+          cp -R includes assets vendor_scoped "$STAGE/"
+          if [ -d languages ]; then cp -R languages "$STAGE/"; fi
+
+          (cd "$(dirname "$STAGE")" && zip -rq square-terminal-for-woocommerce.zip square-terminal-for-woocommerce)
+          mv "$(dirname "$STAGE")/square-terminal-for-woocommerce.zip" .
+
+      - name: Create release and upload ZIP
+        if: steps.check_release.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+
+          NOTES_FILE="docs/releases/$VERSION.md"
+          NOTES_ARGS=(--notes "Release v$VERSION")
+          if [ -f "$NOTES_FILE" ]; then
+            NOTES_ARGS=(--notes-file "$NOTES_FILE")
+          fi
+
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" square-terminal-for-woocommerce.zip --clobber
+            gh release edit "v$VERSION" "${NOTES_ARGS[@]}"
+          else
+            gh release create "v$VERSION" \
+              square-terminal-for-woocommerce.zip \
+              --title "Release v$VERSION" \
+              "${NOTES_ARGS[@]}"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
