@@ -152,8 +152,12 @@ final class CheckoutReconciler {
 			$this->cache_state( $checkout, $order );
 		}
 
-		if ( $collected < $requested ) {
+		$underpaid = $collected < $requested;
+		if ( $underpaid ) {
 			$order->add_order_note( __( 'Square Terminal warning: the amount collected is less than the WooCommerce order total. Review this order before fulfillment.', 'square-terminal-for-woocommerce' ) );
+			if ( ! $order->is_paid() ) {
+				$order->update_status( 'on-hold' );
+			}
 		}
 
 		if ( $tip > 0 ) {
@@ -166,9 +170,9 @@ final class CheckoutReconciler {
 			OrderMeta::close_current_attempt( $order, 'COMPLETED' );
 		}
 
-		if ( ! $order->is_paid() ) {
+		if ( ! $underpaid && ! $order->is_paid() ) {
 			$order->payment_complete( (string) ( $payment_ids[0] ?? '' ) );
-		} elseif ( $is_abandoned ) {
+		} elseif ( $is_abandoned && $order->is_paid() ) {
 			$order->add_order_note( __( 'Square Terminal warning: a detached checkout later completed after this order was already paid. Review for a possible duplicate payment.', 'square-terminal-for-woocommerce' ) );
 		}
 
