@@ -1,0 +1,10 @@
+{
+  "name": "square-terminal-for-woocommerce",
+  "version": "0.1.0",
+  "description": "Cashier frontend tests for Square Terminal for WooCommerce.",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test tests/js/*.test.js"
+  }
+}
