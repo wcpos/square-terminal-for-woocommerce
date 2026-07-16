@@ -10,6 +10,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal;
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Utils\CurrencyConverter;
 
@@ -26,17 +27,22 @@ final class AjaxHandler {
 	/** @var SquareErrorMapper */
 	private SquareErrorMapper $error_mapper;
 
+	/** @var OrderLock */
+	private OrderLock $order_lock;
+
 	/**
 	 * Constructor.
 	 *
 	 * @param object                  $terminal_adapter Square Terminal adapter.
 	 * @param CheckoutReconciler|null $reconciler       Checkout reconciler.
 	 * @param SquareErrorMapper|null  $error_mapper     Square error mapper.
+	 * @param OrderLock|null          $order_lock       Per-order mutation lock.
 	 */
-	public function __construct( $terminal_adapter, ?CheckoutReconciler $reconciler = null, ?SquareErrorMapper $error_mapper = null ) {
+	public function __construct( $terminal_adapter, ?CheckoutReconciler $reconciler = null, ?SquareErrorMapper $error_mapper = null, ?OrderLock $order_lock = null ) {
 		$this->terminal_adapter = $terminal_adapter;
 		$this->reconciler       = $reconciler ?? new CheckoutReconciler( $terminal_adapter );
 		$this->error_mapper     = $error_mapper ?? new SquareErrorMapper();
+		$this->order_lock       = $order_lock ?? new OrderLock();
 	}
 
 	/**
@@ -50,26 +56,44 @@ final class AjaxHandler {
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
 		}
-		$order = $authorized['order'];
-
-		if ( $order->is_paid() ) {
-			return $this->error_response( 409, __( 'This order is already paid.', 'square-terminal-for-woocommerce' ) );
-		}
-
 		$device_id = sanitize_text_field( $request['device_id'] ?? '' );
 		if ( '' === $device_id ) {
 			return $this->error_response( 400, __( 'Device ID is required.', 'square-terminal-for-woocommerce' ) );
 		}
 
+		return $this->with_fresh_order_lock(
+			$authorized['order']->get_id(),
+			fn( $order ) => $this->create_terminal_checkout_for_order( $order, $device_id )
+		);
+	}
+
+	/**
+	 * Create a checkout after acquiring the order lock and reloading the order.
+	 *
+	 * @param object $order     Fresh WooCommerce order.
+	 * @param string $device_id Square device ID.
+	 * @return array<string,mixed>
+	 */
+	private function create_terminal_checkout_for_order( $order, string $device_id ): array {
+		if ( $order->is_paid() ) {
+			return $this->error_response( 409, __( 'This order is already paid.', 'square-terminal-for-woocommerce' ) );
+		}
+
 		$current_checkout = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 		$current_attempt  = (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
 		$current_device   = (string) $order->get_meta( '_sqtwc_device_id', true );
-		if ( '' !== $current_checkout || ( '' !== $current_attempt && '' !== $current_device && $device_id !== $current_device ) ) {
+		if ( '' !== $current_checkout ) {
 			return $this->error_response( 409, __( 'A Terminal payment attempt is already active for this order.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		$idempotency_key = (string) $order->get_meta( '_sqtwc_checkout_idempotency_key', true );
-		if ( '' === $current_attempt || '' === $idempotency_key ) {
+		if ( '' !== $current_attempt ) {
+			if ( $device_id !== $current_device ) {
+				return $this->error_response( 409, __( 'Retry on the original terminal or release the payment first.', 'square-terminal-for-woocommerce' ) );
+			}
+
+			$device_id = $current_device;
+		} else {
 			$current_attempt  = wp_generate_uuid4();
 			$idempotency_key = wp_generate_uuid4();
 			OrderMeta::start_attempt( $order, $current_attempt, $idempotency_key, $device_id );
@@ -97,6 +121,9 @@ final class AjaxHandler {
 				Logger::error( 'Square Terminal checkout creation failed', $mapped['log_context'] );
 				if ( ! $mapped['retriable'] || 1 === $attempt ) {
 					OrderMeta::append_log( $order, 'error', $mapped['cashier_message'] );
+					if ( ! $mapped['retriable'] ) {
+						OrderMeta::close_current_attempt( $order, 'failed' );
+					}
 					$order->save();
 
 					return $this->mapped_error_response( $mapped );
@@ -144,38 +171,41 @@ final class AjaxHandler {
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
 		}
-		$order = $authorized['order'];
+		return $this->with_fresh_order_lock(
+			$authorized['order']->get_id(),
+			function ( $order ) use ( $request ): array {
+				if ( $order->is_paid() ) {
+					return $this->with_redirect(
+						array(
+							'status'           => 'COMPLETED',
+							'cashier_message'  => CheckoutReconciler::cashier_message( 'COMPLETED' ),
+							'continue_polling' => false,
+						),
+						$order
+					);
+				}
 
-		if ( $order->is_paid() ) {
-			return $this->with_redirect(
-				array(
-					'status'           => 'COMPLETED',
-					'cashier_message'  => CheckoutReconciler::cashier_message( 'COMPLETED' ),
-					'continue_polling' => false,
-				),
-				$order
-			);
-		}
+				$cached_status = (string) $order->get_meta( '_sqtwc_checkout_status', true );
+				$checkout_id   = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+				if ( in_array( $cached_status, array( 'COMPLETED', 'CANCELED' ), true ) || '' === $checkout_id ) {
+					return $this->cached_status_response( $order, $cached_status, $checkout_id );
+				}
 
-		$cached_status = (string) $order->get_meta( '_sqtwc_checkout_status', true );
-		$checkout_id   = (string) $order->get_meta( '_sqtwc_checkout_id', true );
-		if ( in_array( $cached_status, array( 'COMPLETED', 'CANCELED' ), true ) || '' === $checkout_id ) {
-			return $this->cached_status_response( $order, $cached_status, $checkout_id );
-		}
+				$force        = '1' === (string) ( $request['force'] ?? '' );
+				$last_checked = (int) $order->get_meta( '_sqtwc_square_checked_at', true );
+				if ( ! $force && $last_checked > 0 && ( time() - $last_checked ) < 5 ) {
+					return $this->cached_status_response( $order, $cached_status, $checkout_id );
+				}
 
-		$force        = '1' === (string) ( $request['force'] ?? '' );
-		$last_checked = (int) $order->get_meta( '_sqtwc_square_checked_at', true );
-		if ( ! $force && $last_checked > 0 && ( time() - $last_checked ) < 5 ) {
-			return $this->cached_status_response( $order, $cached_status, $checkout_id );
-		}
+				try {
+					$result = $this->fetch_and_reconcile( $order, $checkout_id );
+				} catch ( Throwable $exception ) {
+					return $this->fetch_error_response( $exception, $order );
+				}
 
-		try {
-			$result = $this->fetch_and_reconcile( $order, $checkout_id );
-		} catch ( Throwable $exception ) {
-			return $this->fetch_error_response( $exception, $order );
-		}
-
-		return $this->with_redirect( $result, $order );
+				return $this->with_redirect( $result, $order );
+			}
+		);
 	}
 
 	/**
@@ -188,11 +218,6 @@ final class AjaxHandler {
 		$authorized = $this->authorized_order( $request );
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
-		}
-
-		$identity_error = $this->validate_current_identity( $authorized['order'], $request );
-		if ( null !== $identity_error ) {
-			return $identity_error;
 		}
 
 		return $this->cancel_terminal_checkout_for_order(
@@ -212,6 +237,22 @@ final class AjaxHandler {
 	 * @return array<string,mixed>
 	 */
 	public function cancel_terminal_checkout_for_order( $order, string $checkout_id, string $device_id, array $options = array() ): array {
+		return $this->with_fresh_order_lock(
+			$order->get_id(),
+			fn( $fresh_order ) => $this->cancel_terminal_checkout_locked( $fresh_order, $checkout_id, $device_id, $options )
+		);
+	}
+
+	/**
+	 * Execute compare-before-cancel while the order lock is held.
+	 *
+	 * @param object              $order       Fresh WooCommerce order.
+	 * @param string              $checkout_id Square checkout ID.
+	 * @param string              $device_id   Square device ID.
+	 * @param array<string,mixed> $options     SDK request options.
+	 * @return array<string,mixed>
+	 */
+	private function cancel_terminal_checkout_locked( $order, string $checkout_id, string $device_id, array $options ): array {
 		if ( $checkout_id !== (string) $order->get_meta( '_sqtwc_checkout_id', true ) || $device_id !== (string) $order->get_meta( '_sqtwc_device_id', true ) ) {
 			return $this->error_response( 409, __( 'The Terminal checkout no longer matches this payment attempt.', 'square-terminal-for-woocommerce' ) );
 		}
@@ -262,29 +303,43 @@ final class AjaxHandler {
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
 		}
-		$order          = $authorized['order'];
-		$identity_error = $this->validate_current_identity( $order, $request );
-		if ( null !== $identity_error ) {
-			return $identity_error;
-		}
+		return $this->with_fresh_order_lock(
+			$authorized['order']->get_id(),
+			function ( $order ) use ( $request ): array {
+				$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+				if ( '' === $checkout_id ) {
+					$posted_device = sanitize_text_field( $request['device_id'] ?? '' );
+					$stored_device = (string) $order->get_meta( '_sqtwc_device_id', true );
+					$identity_error = '' === $posted_device || $posted_device !== $stored_device
+						? $this->error_response( 409, __( 'The Terminal checkout no longer matches this payment attempt.', 'square-terminal-for-woocommerce' ) )
+						: null;
+				} else {
+					$identity_error = $this->validate_current_identity( $order, $request );
+				}
+				if ( null !== $identity_error ) {
+					return $identity_error;
+				}
 
-		$checkout_id = (string) $request['checkout_id'];
-		$abandoned   = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
-		$abandoned   = is_array( $abandoned ) ? $abandoned : array();
-		if ( ! in_array( $checkout_id, $abandoned, true ) ) {
-			$abandoned[] = $checkout_id;
-		}
-		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $abandoned );
-		OrderMeta::close_current_attempt( $order, 'abandoned' );
-		$order->update_meta_data( '_sqtwc_checkout_status', '' );
-		$order->update_meta_data( '_sqtwc_checkout_updated_at', '' );
-		OrderMeta::append_log( $order, 'warning', __( 'Terminal checkout released. Its final Square status will still be reconciled.', 'square-terminal-for-woocommerce' ) );
-		$order->save();
+				if ( '' !== $checkout_id ) {
+					$abandoned = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
+					$abandoned = is_array( $abandoned ) ? $abandoned : array();
+					if ( ! in_array( $checkout_id, $abandoned, true ) ) {
+						$abandoned[] = $checkout_id;
+					}
+					$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', $abandoned );
+				}
+				OrderMeta::close_current_attempt( $order, 'abandoned' );
+				$order->update_meta_data( '_sqtwc_checkout_status', '' );
+				$order->update_meta_data( '_sqtwc_checkout_updated_at', '' );
+				OrderMeta::append_log( $order, 'warning', __( 'Terminal checkout released. Its final Square status will still be reconciled.', 'square-terminal-for-woocommerce' ) );
+				$order->save();
 
-		return array(
-			'status'           => 'IDLE',
-			'cashier_message'  => __( 'Terminal payment released. You can start another payment.', 'square-terminal-for-woocommerce' ),
-			'continue_polling' => false,
+				return array(
+					'status'           => 'IDLE',
+					'cashier_message'  => __( 'Terminal payment released. You can start another payment.', 'square-terminal-for-woocommerce' ),
+					'continue_polling' => false,
+				);
+			}
 		);
 	}
 
@@ -302,6 +357,40 @@ final class AjaxHandler {
 		$checkout = $this->terminal_adapter->get_checkout( $checkout_id, $options );
 
 		return $this->reconciler->reconcile( $checkout, $order, $options );
+	}
+
+	/**
+	 * Acquire the per-order lock and pass a freshly loaded order to a callback.
+	 *
+	 * @param int      $order_id Order ID.
+	 * @param callable $callback Locked callback.
+	 * @return array<string,mixed>
+	 */
+	private function with_fresh_order_lock( int $order_id, callable $callback ): array {
+		try {
+			return $this->order_lock->with_lock(
+				$order_id,
+				function () use ( $order_id, $callback ): array {
+					$order = wc_get_order( $order_id );
+					if ( ! $order ) {
+						return $this->error_response( 404, __( 'Order not found.', 'square-terminal-for-woocommerce' ) );
+					}
+
+					return $callback( $order );
+				}
+			);
+		} catch ( Throwable $exception ) {
+			Logger::error(
+				'Square Terminal order mutation lock failed',
+				array(
+					'order_id'        => $order_id,
+					'exception_class' => get_class( $exception ),
+					'detail'          => $exception->getMessage(),
+				)
+			);
+
+			return $this->error_response( 503, __( 'This order is busy. Please try again.', 'square-terminal-for-woocommerce' ) );
+		}
 	}
 
 	/**
@@ -418,7 +507,7 @@ final class AjaxHandler {
 	 */
 	private function mapped_error_response( array $mapped ): array {
 		return array(
-			'status'           => $mapped['retriable'] ? 502 : 400,
+			'status'           => $mapped['http_status'] ?? ( $mapped['retriable'] ? 502 : 400 ),
 			'error_code'       => '' !== $mapped['log_context']['code'] ? $mapped['log_context']['code'] : 'square_error',
 			'cashier_message'  => $mapped['cashier_message'],
 			'retriable'        => $mapped['retriable'],

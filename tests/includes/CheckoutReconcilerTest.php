@@ -78,10 +78,16 @@ final class CheckoutReconcilerTest extends TestCase {
 		self::assertSame( $status, $order->get_meta( '_sqtwc_checkout_status' ) );
 		if ( 'COMPLETED' === $status ) {
 			self::assertTrue( $order->paid );
-			self::assertSame( $already_paid ? 0 : 1, $order->payment_complete_calls );
-			self::assertSame( 1480, $order->get_meta( '_sqtwc_collected_amount' ) );
-			self::assertSame( 246, $order->get_meta( '_sqtwc_tip_amount' ) );
-			self::assertSame( array( 'pay_1' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+			self::assertSame( 0, $already_paid ? $order->payment_complete_calls : $order->payment_complete_calls - 1 );
+			if ( $already_paid ) {
+				// Paid by other means: duplicate alert, original record preserved.
+				self::assertSame( array( 'pay_1' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
+				self::assertNotSame( array( 'pay_1' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+			} else {
+				self::assertSame( 1480, $order->get_meta( '_sqtwc_collected_amount' ) );
+				self::assertSame( 246, $order->get_meta( '_sqtwc_tip_amount' ) );
+				self::assertSame( array( 'pay_1' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+			}
 		} elseif ( in_array( $status, array( 'PENDING', 'IN_PROGRESS', 'CANCEL_REQUESTED' ), true ) ) {
 			self::assertSame( 'attempt_current', $order->get_meta( '_sqtwc_current_attempt_id' ) );
 		} else {
@@ -190,6 +196,126 @@ final class CheckoutReconcilerTest extends TestCase {
 
 		self::assertSame( array( 'timeout' => 8.0 ), $adapter->last_payment_options );
 		self::assertSame( '', $order->attempt_during_completion );
+	}
+
+	public function test_under_collection_places_order_on_hold_without_completing_payment(): void {
+		$order   = $this->open_order();
+		$adapter = new ReconcilerAdapter();
+		$adapter->payments['pay_partial'] = array(
+			'id'             => 'pay_partial',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1000,
+			'total_currency' => 'USD',
+			'tip_amount'     => 0,
+			'tip_currency'   => null,
+			'card_status'    => null,
+		);
+
+		$result = ( new CheckoutReconciler( $adapter ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_partial' ),
+				'updated_at'   => '2026-07-16T10:00:03Z',
+			),
+			$order
+		);
+
+		self::assertSame( 'COMPLETED', $result['status'] );
+		self::assertFalse( $result['continue_polling'] );
+		self::assertStringContainsString( 'partially collected', $result['cashier_message'] );
+		self::assertSame( 0, $order->payment_complete_calls );
+		self::assertFalse( $order->paid );
+		self::assertSame( 'on-hold', $order->get_status() );
+		self::assertContains( 'Square Terminal collected 10.00 USD of 12.34 USD. Verify the payment in Square Dashboard before fulfilling.', $order->notes );
+		self::assertSame( array( 'pay_partial' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+		self::assertSame( 1000, $order->get_meta( '_sqtwc_collected_amount' ) );
+	}
+
+	public function test_exact_amount_and_overage_complete_with_overage_as_tip(): void {
+		foreach ( array( 1234 => 0, 1480 => 246 ) as $collected => $expected_tip ) {
+			$order   = $this->open_order();
+			$adapter = new ReconcilerAdapter();
+			$adapter->payments['pay_amount'] = array(
+				'id'             => 'pay_amount',
+				'status'         => 'COMPLETED',
+				'total_amount'   => $collected,
+				'total_currency' => 'USD',
+				'tip_amount'     => 0,
+				'tip_currency'   => null,
+				'card_status'    => null,
+			);
+
+			( new CheckoutReconciler( $adapter ) )->reconcile(
+				array(
+					'id'           => 'chk_current',
+					'status'       => 'COMPLETED',
+					'reference_id' => 'woocommerce_order_99',
+					'payment_ids'  => array( 'pay_amount' ),
+					'updated_at'   => '2026-07-16T10:00:03Z',
+				),
+				$order
+			);
+
+			self::assertTrue( $order->paid );
+			self::assertSame( 1, $order->payment_complete_calls );
+			self::assertSame( $expected_tip, $order->get_meta( '_sqtwc_tip_amount' ) );
+		}
+	}
+
+	public function test_current_checkout_duplicate_payment_on_paid_order_adds_alert_and_meta(): void {
+		$order = $this->open_order();
+		$order->paid = true;
+		$order->update_meta_data( '_sqtwc_payment_ids', array( 'pay_original' ) );
+		$order->update_meta_data( '_sqtwc_duplicate_payment_ids', array( 'pay_previous' ) );
+		$adapter = new ReconcilerAdapter();
+		$adapter->payments['pay_duplicate'] = array(
+			'id'             => 'pay_duplicate',
+			'status'         => 'COMPLETED',
+			'total_amount'   => 1234,
+			'total_currency' => 'USD',
+			'tip_amount'     => 0,
+			'tip_currency'   => null,
+			'card_status'    => null,
+		);
+
+		( new CheckoutReconciler( $adapter ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_duplicate' ),
+				'updated_at'   => '2026-07-16T10:00:03Z',
+			),
+			$order
+		);
+
+		self::assertContains( '⚠ Square Terminal captured an additional payment on an already-paid order. Payment IDs: pay_duplicate. Refund may be required.', $order->notes );
+		self::assertSame( array( 'pay_previous', 'pay_duplicate' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
+		self::assertSame( 0, $order->payment_complete_calls );
+		self::assertSame( array( 'pay_original' ), $order->get_meta( '_sqtwc_payment_ids' ), 'Duplicate payments must not overwrite the original payment record.' );
+		self::assertSame( 'pending', $order->status, 'A duplicate payment must not move an already-paid order to on-hold.' );
+	}
+
+	public function test_matching_checkout_applies_when_square_created_at_predates_attempt_by_one_second(): void {
+		$order   = $this->open_order();
+		$started = (int) $order->get_meta( '_sqtwc_attempt_started' );
+
+		$result = ( new CheckoutReconciler( new ReconcilerAdapter() ) )->reconcile(
+			array(
+				'id'           => 'chk_current',
+				'status'       => 'COMPLETED',
+				'reference_id' => 'woocommerce_order_99',
+				'payment_ids'  => array( 'pay_1' ),
+				'created_at'   => gmdate( 'c', $started - 1 ),
+				'updated_at'   => '2026-07-16T10:00:03Z',
+			),
+			$order
+		);
+
+		self::assertTrue( $result['applied'] );
+		self::assertTrue( $order->paid );
 	}
 
 	private function open_order(): \SQTWC_Test_Order {

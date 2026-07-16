@@ -17,12 +17,16 @@ final class SquareErrorMapper {
 	 * Map a Square error array, SDK exception, or transport exception.
 	 *
 	 * @param array<string,mixed>|Throwable $error Provider error.
-	 * @return array{retriable:bool,cashier_message:string,log_context:array<string,mixed>}
+	 * @return array{retriable:bool,http_status:int,cashier_message:string,log_context:array<string,mixed>}
 	 */
 	public function map( $error ): array {
 		$normalized = $this->normalize( $error );
 		$category   = $normalized['category'];
 		$code       = $normalized['code'];
+
+		if ( 'IDEMPOTENCY_KEY_REUSED' === $code ) {
+			return $this->result( false, __( 'The previous payment request may already be active. Check the terminal or release the payment.', 'square-terminal-for-woocommerce' ), $normalized, 409 );
+		}
 
 		if ( 'AUTHENTICATION_ERROR' === $category ) {
 			return $this->result( false, __( 'Square connection failed — check plugin settings.', 'square-terminal-for-woocommerce' ), $normalized );
@@ -114,13 +118,15 @@ final class SquareErrorMapper {
 	 * @param bool                $retriable Retriable flag.
 	 * @param string              $message   Safe cashier message.
 	 * @param array<string,mixed> $context   Private provider context.
-	 * @return array{retriable:bool,cashier_message:string,log_context:array<string,mixed>}
+	 * @param int|null            $http_status HTTP status override.
+	 * @return array{retriable:bool,http_status:int,cashier_message:string,log_context:array<string,mixed>}
 	 */
-	private function result( bool $retriable, string $message, array $context ): array {
+	private function result( bool $retriable, string $message, array $context, ?int $http_status = null ): array {
 		unset( $context['transport'] );
 
 		return array(
 			'retriable'       => $retriable,
+			'http_status'     => $http_status ?? ( $retriable ? 502 : 400 ),
 			'cashier_message' => $message,
 			'log_context'     => $context,
 		);

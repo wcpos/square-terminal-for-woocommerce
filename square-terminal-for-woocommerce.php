@@ -91,6 +91,8 @@ spl_autoload_register(
 	}
 );
 
+register_deactivation_hook( __FILE__, array( Services\PaymentSweeper::class, 'unschedule' ) );
+
 $sqtwc_scoped_autoload = PLUGIN_PATH . 'vendor_scoped/autoload.php';
 $sqtwc_dev_autoload    = PLUGIN_PATH . 'vendor/autoload.php';
 

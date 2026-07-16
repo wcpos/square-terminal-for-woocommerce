@@ -56,10 +56,6 @@ final class CheckoutReconciler {
 			return $this->ignored( $order, 'wrong_attempt' );
 		}
 
-		if ( ! $is_abandoned && $this->predates_attempt( $checkout, $order ) ) {
-			return $this->ignored( $order, 'earlier_attempt' );
-		}
-
 		if ( ! $is_abandoned && $this->is_stale( $checkout, $order ) ) {
 			return $this->ignored( $order, 'stale' );
 		}
@@ -142,18 +138,58 @@ final class CheckoutReconciler {
 			$tip          += (int) $payment['tip_amount'];
 		}
 
-		$requested = CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() );
-		$tip       = max( $tip, $collected - $requested, 0 );
+		$requested           = CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() );
+		$tip                 = max( $tip, $collected - $requested, 0 );
+		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
+		$recorded_payment_ids = is_array( $recorded_payment_ids ) ? $recorded_payment_ids : array();
+
+		if ( $order->is_paid() && ! empty( array_diff( $payment_ids, $recorded_payment_ids ) ) ) {
+			$duplicate_ids   = $order->get_meta( '_sqtwc_duplicate_payment_ids', true );
+			$duplicate_ids   = is_array( $duplicate_ids ) ? $duplicate_ids : array();
+			$duplicate_ids   = array_values( array_unique( array_merge( $duplicate_ids, $payment_ids ) ) );
+			$duplicate_note  = sprintf(
+				/* translators: %s: comma-separated Square payment IDs. */
+				__( '⚠ Square Terminal captured an additional payment on an already-paid order. Payment IDs: %s. Refund may be required.', 'square-terminal-for-woocommerce' ),
+				implode( ', ', $payment_ids )
+			);
+			$order->update_meta_data( '_sqtwc_duplicate_payment_ids', $duplicate_ids );
+			$order->add_order_note( $duplicate_note );
+			Logger::error(
+				'Square Terminal captured an additional payment on an already-paid order',
+				array(
+					'order_id'    => $order->get_id(),
+					'checkout_id' => $checkout['id'] ?? '',
+					'payment_ids' => $payment_ids,
+				)
+			);
+
+			// Preserve the original payment record; close out this checkout
+			// without mutating the paid order's state any further.
+			if ( $is_abandoned ) {
+				$this->remove_abandoned_checkout( (string) $checkout['id'], $order );
+			} else {
+				$this->cache_state( $checkout, $order );
+				OrderMeta::close_current_attempt( $order, 'COMPLETED' );
+			}
+
+			$message = __( 'Payment captured, but this order was already paid. A refund may be required — check the order notes.', 'square-terminal-for-woocommerce' );
+			OrderMeta::append_log( $order, 'error', $message );
+			$order->save();
+
+			return array(
+				'applied'          => true,
+				'status'           => 'COMPLETED',
+				'cashier_message'  => $message,
+				'continue_polling' => false,
+			);
+		}
+
 		$order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
 		$order->update_meta_data( '_sqtwc_collected_amount', $collected );
 		$order->update_meta_data( '_sqtwc_tip_amount', $tip );
 
 		if ( ! $is_abandoned ) {
 			$this->cache_state( $checkout, $order );
-		}
-
-		if ( $collected < $requested ) {
-			$order->add_order_note( __( 'Square Terminal warning: the amount collected is less than the WooCommerce order total. Review this order before fulfillment.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		if ( $tip > 0 ) {
@@ -166,10 +202,37 @@ final class CheckoutReconciler {
 			OrderMeta::close_current_attempt( $order, 'COMPLETED' );
 		}
 
+		if ( $collected < $requested ) {
+			$note = sprintf(
+				/* translators: 1: collected amount, 2: order total. */
+				__( 'Square Terminal collected %1$s of %2$s. Verify the payment in Square Dashboard before fulfilling.', 'square-terminal-for-woocommerce' ),
+				CurrencyConverter::format_minor_units( $collected, $order->get_currency() ),
+				CurrencyConverter::format_minor_units( $requested, $order->get_currency() )
+			);
+			$message = __( 'Payment was only partially collected. The order is on hold; verify the payment in Square Dashboard.', 'square-terminal-for-woocommerce' );
+			$order->add_order_note( $note );
+			$order->update_status( 'on-hold' );
+			OrderMeta::append_log( $order, 'error', $message );
+			$order->save();
+			Logger::error(
+				'Square Terminal payment was under-collected',
+				array(
+					'order_id'  => $order->get_id(),
+					'collected' => $collected,
+					'total'     => $requested,
+				)
+			);
+
+			return array(
+				'applied'          => true,
+				'status'           => 'COMPLETED',
+				'cashier_message'  => $message,
+				'continue_polling' => false,
+			);
+		}
+
 		if ( ! $order->is_paid() ) {
 			$order->payment_complete( (string) ( $payment_ids[0] ?? '' ) );
-		} elseif ( $is_abandoned ) {
-			$order->add_order_note( __( 'Square Terminal warning: a detached checkout later completed after this order was already paid. Review for a possible duplicate payment.', 'square-terminal-for-woocommerce' ) );
 		}
 
 		$message = self::cashier_message( 'COMPLETED' );
@@ -271,19 +334,6 @@ final class CheckoutReconciler {
 		if ( ! empty( $checkout['updated_at'] ) ) {
 			$order->update_meta_data( '_sqtwc_checkout_updated_at', (string) $checkout['updated_at'] );
 		}
-	}
-
-	/**
-	 * Determine whether provider state predates this attempt.
-	 *
-	 * @param array<string,mixed> $checkout Checkout state.
-	 * @param object              $order    WooCommerce order.
-	 */
-	private function predates_attempt( array $checkout, $order ): bool {
-		$created = isset( $checkout['created_at'] ) ? strtotime( (string) $checkout['created_at'] ) : false;
-		$started = (int) $order->get_meta( '_sqtwc_attempt_started', true );
-
-		return false !== $created && $started > 0 && $created < $started;
 	}
 
 	/**

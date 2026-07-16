@@ -205,6 +205,108 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 1, $adapter->creates );
 	}
 
+	public function test_non_retriable_create_failure_closes_attempt_and_allows_second_create(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results     = array(
+			new SquareApiException(
+				'failed',
+				400,
+				array(
+					'errors' => array(
+						array(
+							'category' => 'INVALID_REQUEST_ERROR',
+							'code'     => 'INVALID_LOCATION',
+						),
+					),
+				)
+			),
+			$adapter->checkout( 'PENDING', array( 'id' => 'chk_second' ) ),
+		);
+		$handler                     = new AjaxHandler( $adapter );
+
+		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 400, $failed['status'] );
+		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_device_id' ) );
+		self::assertSame( 'failed', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
+
+		$created = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $created['status'] );
+		self::assertSame( 'chk_second', $order->get_meta( '_sqtwc_checkout_id' ) );
+		self::assertSame( 2, $adapter->creates );
+	}
+
+	public function test_ambiguous_create_failure_keeps_attempt_and_resume_reuses_identity(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results     = array(
+			new \RuntimeException( 'first timeout' ),
+			new \RuntimeException( 'second timeout' ),
+			$adapter->checkout( 'PENDING', array( 'id' => 'chk_resumed' ) ),
+		);
+		$handler                     = new AjaxHandler( $adapter );
+
+		$failed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 502, $failed['status'] );
+		self::assertSame( '00000000-0000-4000-8000-000000000000', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $order->get_meta( '_sqtwc_checkout_idempotency_key' ) );
+		self::assertSame( 'device_a', $order->get_meta( '_sqtwc_device_id' ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_id' ) );
+
+		$resumed = $handler->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 200, $resumed['status'] );
+		self::assertSame( 'chk_resumed', $order->get_meta( '_sqtwc_checkout_id' ) );
+		self::assertSame( 3, $adapter->creates );
+		self::assertSame( $adapter->create_requests[0]['idempotency_key'], $adapter->create_requests[2]['idempotency_key'] );
+		self::assertSame( 'device_a', $adapter->create_requests[2]['device_id'] );
+	}
+
+	public function test_resume_with_different_posted_device_returns_conflict(): void {
+		$order                       = $this->checkoutless_order();
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+
+		$result = ( new AjaxHandler( $adapter ) )->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_other', 'order_key' => 'key' ) );
+
+		self::assertSame( 409, $result['status'] );
+		self::assertSame( 'Retry on the original terminal or release the payment first.', $result['cashier_message'] );
+		self::assertSame( 0, $adapter->creates );
+	}
+
+	public function test_idempotency_key_reused_create_failure_returns_conflict_and_closes_attempt(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$adapter->create_results[]   = new SquareApiException(
+			'failed',
+			400,
+			array(
+				'errors' => array(
+					array(
+						'category' => 'INVALID_REQUEST_ERROR',
+						'code'     => 'IDEMPOTENCY_KEY_REUSED',
+					),
+				),
+			)
+		);
+
+		$result = ( new AjaxHandler( $adapter ) )->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'device_a', 'order_key' => 'key' ) );
+
+		self::assertSame( 409, $result['status'] );
+		self::assertFalse( $result['retriable'] );
+		self::assertSame( 'The previous payment request may already be active. Check the terminal or release the payment.', $result['cashier_message'] );
+		self::assertSame( 'failed', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
+		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+	}
+
 	public function test_status_endpoint_throttles_and_force_bypasses_cache(): void {
 		$order = $this->open_order();
 		$order->update_meta_data( '_sqtwc_square_checked_at', time() );
@@ -308,6 +410,26 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertEmpty( $order->get_meta( '_sqtwc_attempt_history', true ) );
 	}
 
+	public function test_detach_releases_checkoutless_attempt_with_matching_device_without_square_call(): void {
+		$order = $this->checkoutless_order();
+		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_old' ) );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		$request                     = $this->cancel_request();
+		$request['checkout_id']      = '';
+
+		$result = ( new AjaxHandler( $adapter ) )->detach_terminal_checkout( $request );
+
+		self::assertSame( 'IDLE', $result['status'] );
+		self::assertSame( array( 'chk_old' ), $order->get_meta( '_sqtwc_abandoned_checkout_ids' ) );
+		self::assertSame( 'abandoned', $order->get_meta( '_sqtwc_attempt_history' )[0]['status'] );
+		self::assertSame( '', $order->get_meta( '_sqtwc_current_attempt_id' ) );
+		self::assertSame( 0, $adapter->creates );
+		self::assertSame( 0, $adapter->gets );
+		self::assertSame( 0, $adapter->cancels );
+		self::assertSame( 0, $adapter->payment_gets );
+	}
+
 	private function open_order(): \SQTWC_Test_Order {
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt_current' );
@@ -316,6 +438,13 @@ final class AjaxHandlerTest extends TestCase {
 		$order->update_meta_data( '_sqtwc_checkout_status', 'PENDING' );
 		$order->update_meta_data( '_sqtwc_device_id', 'device_current' );
 		$order->update_meta_data( '_sqtwc_attempt_started', time() - 30 );
+
+		return $order;
+	}
+
+	private function checkoutless_order(): \SQTWC_Test_Order {
+		$order = $this->open_order();
+		$order->update_meta_data( '_sqtwc_checkout_id', '' );
 
 		return $order;
 	}

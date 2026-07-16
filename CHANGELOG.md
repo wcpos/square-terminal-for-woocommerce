@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file. Release notes f
 - `SquareErrorMapper`: Square error taxonomy mapped to retriability and cashier-safe messages; single retry with the same idempotency key on transient failures.
 - Terminal checkout options: explicit 5-minute `deadline_duration`, order note, `skip_receipt_screen` and `collect_signature` settings.
 - Attempt-scoped order meta schema with attempt history and capped payment log / webhook event dedup lists.
+- Ten-minute payment reconciliation sweeper for stale active checkouts and every detached checkout, with bounded batches and per-order error isolation.
+- Atomic per-order mutation locks across checkout creation, polling, cancellation, detach, webhook, order-status, and background reconciliation paths.
 - CI: test workflow (PHP 8.1/8.4 + Node) and release workflow (version-gated GitHub release with scoped-vendor plugin ZIP).
 - Best-in-class update spec and sibling-plugin/Square-API research under `docs/`.
 
@@ -22,6 +24,9 @@ All notable changes to this project are documented in this file. Release notes f
 - Checkout creation recomputes the amount from the order server-side, guards against duplicate starts, and handles the `TIMED_OUT`-boundary race by verifying payments before honoring a cancellation.
 - Cancellation is fetch → cancel → refetch: a payment completed during cancellation completes the order instead of reporting an error.
 - Cancel/detach requests require matching `checkout_id` and `device_id` (compare-before-cancel).
+- Under-collected Terminal payments no longer complete the WooCommerce order: verified payment metadata is retained, the order is placed on hold, and the cashier is told to verify the payment in Square Dashboard.
+- Any additional Square capture on an already-paid order now adds a prominent order note, logs an error, and appends the payment IDs to duplicate-payment metadata for refund review.
+- Attempt correlation now relies on checkout identity plus Square's `updated_at` monotonicity; local and Square clock skew can no longer reject a matching checkout.
 
 ## [0.1.0] - 2026-06-05
 

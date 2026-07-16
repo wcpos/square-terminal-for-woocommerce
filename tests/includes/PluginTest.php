@@ -21,11 +21,18 @@ final class OrderStatusCancelHandler {
 }
 
 final class PluginTest extends TestCase {
+	protected function setUp(): void {
+		unset( $GLOBALS['wpdb'] );
+		$GLOBALS['sqtwc_orders']  = array();
+		$GLOBALS['sqtwc_options'] = array();
+	}
+
 	public function test_order_status_change_cancels_open_attempt_with_eight_second_timeout(): void {
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt' );
 		$order->update_meta_data( '_sqtwc_checkout_id', 'chk' );
 		$order->update_meta_data( '_sqtwc_device_id', 'device' );
+		$GLOBALS['sqtwc_orders'][99] = $order;
 		$handler = new OrderStatusCancelHandler();
 
 		( new Plugin( $handler ) )->cancel_open_attempt_on_order_status_change( 99, 'pending', 'processing', $order );
@@ -42,6 +49,7 @@ final class PluginTest extends TestCase {
 		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt' );
 		$order->update_meta_data( '_sqtwc_checkout_id', 'chk' );
 		$order->update_meta_data( '_sqtwc_device_id', 'device' );
+		$GLOBALS['sqtwc_orders'][99] = $order;
 		$handler        = new OrderStatusCancelHandler();
 		$handler->throw = true;
 		$plugin         = new Plugin( $handler );

@@ -4,6 +4,7 @@ $GLOBALS['sqtwc_filters'] = array();
 $GLOBALS['sqtwc_actions'] = array();
 $GLOBALS['sqtwc_rest_routes'] = array();
 $GLOBALS['sqtwc_notices'] = array();
+$GLOBALS['sqtwc_cron_events'] = array();
 if ( ! function_exists( 'wp_json_encode' ) ) { function wp_json_encode( $data ) { return json_encode( $data ); } }
 if ( ! function_exists( 'wp_generate_uuid4' ) ) { function wp_generate_uuid4() { return '00000000-0000-4000-8000-000000000000'; } }
 if ( ! function_exists( 'wp_unslash' ) ) { function wp_unslash( $value ) { return $value; } }
@@ -23,7 +24,10 @@ if ( ! function_exists( 'add_filter' ) ) { function add_filter( $hook, $callback
 if ( ! function_exists( 'apply_filters' ) ) { function apply_filters( $hook, $value ) { return $value; } }
 if ( ! function_exists( 'register_rest_route' ) ) { function register_rest_route( $namespace, $route, $args = array() ) { $GLOBALS['sqtwc_rest_routes'][$namespace . $route] = $args; return true; } }
 if ( ! function_exists( 'register_activation_hook' ) ) { function register_activation_hook( $file, $callback ) { $GLOBALS['sqtwc_activation_hook'] = array( $file, $callback ); } }
+if ( ! function_exists( 'register_deactivation_hook' ) ) { function register_deactivation_hook( $file, $callback ) { $GLOBALS['sqtwc_deactivation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'get_option' ) ) { function get_option( $key, $default = false ) { $GLOBALS['sqtwc_get_option_count'][$key] = ($GLOBALS['sqtwc_get_option_count'][$key] ?? 0) + 1; return $GLOBALS['sqtwc_options'][$key] ?? $default; } }
+if ( ! function_exists( 'add_option' ) ) { function add_option( $key, $value, $deprecated = '', $autoload = 'yes' ) { if ( array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
+if ( ! function_exists( 'delete_option' ) ) { function delete_option( $key ) { if ( ! array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } unset( $GLOBALS['sqtwc_options'][$key] ); return true; } }
 if ( ! function_exists( 'update_option' ) ) { function update_option( $key, $value ) { $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
 if ( ! function_exists( 'is_user_logged_in' ) ) { function is_user_logged_in() { return $GLOBALS['sqtwc_is_user_logged_in'] ?? false; } }
 if ( ! function_exists( 'current_user_can' ) ) { function current_user_can( $cap ) { return $GLOBALS['sqtwc_current_user_can'] ?? false; } }
@@ -37,3 +41,7 @@ if ( ! function_exists( 'wp_create_nonce' ) ) { function wp_create_nonce( $actio
 if ( ! function_exists( 'admin_url' ) ) { function admin_url( $path = '' ) { return 'https://wcpos.local/wp-admin/' . ltrim( $path, '/' ); } }
 if ( ! function_exists( 'wc_add_notice' ) ) { function wc_add_notice( $message, $type = 'notice' ) { $GLOBALS['sqtwc_notices'][] = array($type, $message); } }
 if ( ! function_exists( 'get_bloginfo' ) ) { function get_bloginfo( $show = '' ) { return 'Test Store'; } }
+if ( ! function_exists( 'get_current_blog_id' ) ) { function get_current_blog_id() { return $GLOBALS['sqtwc_blog_id'] ?? 1; } }
+if ( ! function_exists( 'wp_next_scheduled' ) ) { function wp_next_scheduled( $hook ) { return $GLOBALS['sqtwc_cron_events'][$hook] ?? false; } }
+if ( ! function_exists( 'wp_schedule_event' ) ) { function wp_schedule_event( $timestamp, $recurrence, $hook ) { if ( ! isset( $GLOBALS['sqtwc_cron_events'][$hook] ) ) { $GLOBALS['sqtwc_cron_events'][$hook] = $timestamp; $GLOBALS['sqtwc_cron_schedules'][$hook] = $recurrence; } return true; } }
+if ( ! function_exists( 'wp_clear_scheduled_hook' ) ) { function wp_clear_scheduled_hook( $hook ) { unset( $GLOBALS['sqtwc_cron_events'][$hook], $GLOBALS['sqtwc_cron_schedules'][$hook] ); return true; } }

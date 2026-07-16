@@ -8,6 +8,8 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
 use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 
@@ -21,15 +23,25 @@ final class Plugin {
 	/** @var WebhookHandler|object|null */
 	private $webhook_handler;
 
+	/** @var PaymentSweeper|object|null */
+	private $payment_sweeper;
+
+	/** @var OrderLock */
+	private OrderLock $order_lock;
+
 	/**
 	 * Constructor.
 	 *
 	 * @param AjaxHandler|object|null   $ajax_handler    Optional injected AJAX handler.
-	 * @param WebhookHandler|object|null $webhook_handler Optional injected webhook handler.
+	 * @param WebhookHandler|object|null  $webhook_handler  Optional injected webhook handler.
+	 * @param PaymentSweeper|object|null  $payment_sweeper  Optional injected payment sweeper.
+	 * @param OrderLock|null              $order_lock       Optional shared order lock.
 	 */
-	public function __construct( $ajax_handler = null, $webhook_handler = null ) {
+	public function __construct( $ajax_handler = null, $webhook_handler = null, $payment_sweeper = null, ?OrderLock $order_lock = null ) {
 		$this->ajax_handler    = $ajax_handler;
 		$this->webhook_handler = $webhook_handler;
+		$this->payment_sweeper = $payment_sweeper;
+		$this->order_lock      = $order_lock ?? new OrderLock();
 	}
 
 	/**
@@ -47,6 +59,7 @@ final class Plugin {
 		add_action( 'wp_ajax_nopriv_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+		$this->create_payment_sweeper()->register();
 	}
 
 	/**
@@ -101,38 +114,42 @@ final class Plugin {
 	 * @param object|null $order    WooCommerce order.
 	 */
 	public function cancel_open_attempt_on_order_status_change( $order_id, $from, $to, $order = null ): void {
-		unset( $from );
+		unset( $from, $order );
 		if ( ! in_array( $to, array( 'processing', 'completed', 'cancelled', 'failed' ), true ) ) {
 			return;
 		}
 
-		$order = $order ? $order : wc_get_order( $order_id );
-		if ( ! $order || '' === (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) ) {
-			return;
-		}
-
-		$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
-		$device_id   = (string) $order->get_meta( '_sqtwc_device_id', true );
-		if ( '' === $checkout_id || '' === $device_id ) {
-			return;
-		}
-
 		try {
-			$this->create_ajax_handler()->cancel_terminal_checkout_for_order(
-				$order,
-				$checkout_id,
-				$device_id,
-				array(
-					'timeout'    => 8.0,
-					'maxRetries' => 0,
-				)
+			$this->order_lock->with_lock(
+				absint( $order_id ),
+				function () use ( $order_id ): void {
+					$order = wc_get_order( $order_id );
+					if ( ! $order || '' === (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) ) {
+						return;
+					}
+
+					$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+					$device_id   = (string) $order->get_meta( '_sqtwc_device_id', true );
+					if ( '' === $checkout_id || '' === $device_id ) {
+						return;
+					}
+
+					$this->create_ajax_handler()->cancel_terminal_checkout_for_order(
+						$order,
+						$checkout_id,
+						$device_id,
+						array(
+							'timeout'    => 8.0,
+							'maxRetries' => 0,
+						)
+					);
+				}
 			);
 		} catch ( Throwable $exception ) {
 			Logger::error(
 				'Order status transition Terminal cancel failed',
 				array(
 					'order_id'        => $order_id,
-					'checkout_id'     => $checkout_id,
 					'exception_class' => get_class( $exception ),
 					'detail'          => $exception->getMessage(),
 				)
@@ -162,7 +179,7 @@ final class Plugin {
 	 */
 	private function create_ajax_handler() {
 		if ( null === $this->ajax_handler ) {
-			$this->ajax_handler = new AjaxHandler( new SquareTerminalAdapter( ( new SquareClientFactory() )->create() ) );
+			$this->ajax_handler = new AjaxHandler( new SquareTerminalAdapter( ( new SquareClientFactory() )->create() ), null, null, $this->order_lock );
 		}
 
 		return $this->ajax_handler;
@@ -175,10 +192,23 @@ final class Plugin {
 	 */
 	private function create_webhook_handler() {
 		if ( null === $this->webhook_handler ) {
-			$this->webhook_handler = new WebhookHandler();
+			$this->webhook_handler = new WebhookHandler( null, null, $this->order_lock );
 		}
 
 		return $this->webhook_handler;
+	}
+
+	/**
+	 * Create or return the configured payment sweeper.
+	 *
+	 * @return PaymentSweeper|object
+	 */
+	private function create_payment_sweeper() {
+		if ( null === $this->payment_sweeper ) {
+			$this->payment_sweeper = new PaymentSweeper( null, null, $this->order_lock );
+		}
+
+		return $this->payment_sweeper;
 	}
 
 	/**
