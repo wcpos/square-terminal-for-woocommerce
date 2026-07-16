@@ -259,14 +259,34 @@ final class CheckoutReconciler {
 			);
 		}
 
+		if ( $cumulative_overcapture ) {
+			$message = __( 'Square captured an additional payment. A refund may be required — check the order notes.', 'square-terminal-for-woocommerce' );
+			$order->update_status( 'on-hold' );
+			OrderMeta::append_log( $order, 'error', $message );
+			$order->save();
+			Logger::error(
+				'Square Terminal captured more than the order total across multiple checkouts',
+				array(
+					'order_id'    => $order->get_id(),
+					'checkout_id' => $checkout['id'] ?? '',
+					'payment_ids' => $merged_payment_ids,
+				)
+			);
+
+			return array(
+				'applied'          => true,
+				'status'           => 'COMPLETED',
+				'cashier_message'  => $message,
+				'continue_polling' => false,
+			);
+		}
+
 		if ( ! $order->is_paid() ) {
 			$order->payment_complete( (string) ( $new_payment_ids[0] ?? $merged_payment_ids[0] ?? '' ) );
 		}
 
-		$message = $cumulative_overcapture
-			? __( 'Square captured an additional payment. A refund may be required — check the order notes.', 'square-terminal-for-woocommerce' )
-			: self::cashier_message( 'COMPLETED' );
-		OrderMeta::append_log( $order, $cumulative_overcapture ? 'error' : 'success', $message );
+		$message = self::cashier_message( 'COMPLETED' );
+		OrderMeta::append_log( $order, 'success', $message );
 		$order->save();
 		Logger::info( 'Terminal checkout completed', $this->log_context( $checkout, $order ) );
 

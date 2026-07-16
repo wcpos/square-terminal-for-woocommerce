@@ -245,9 +245,12 @@ final class CheckoutReconcilerTest extends TestCase {
 			$order
 		);
 
-		self::assertTrue( $order->paid );
-		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_payment_ids' ) );
+		self::assertFalse( $order->paid );
+		self::assertSame( 0, $order->payment_complete_calls );
+		self::assertSame( 'on-hold', $order->get_status() );
 		self::assertSame( 246, $order->get_meta( '_sqtwc_tip_amount' ), 'Only the explicit Square tip is a tip; cumulative excess is an additional capture.' );
+		self::assertSame( 2480, $order->get_meta( '_sqtwc_collected_amount' ) );
+		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_payment_ids' ) );
 		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
 		self::assertStringContainsString( 'refund may be required', strtolower( $result['cashier_message'] ) );
 		self::assertContains( '⚠ Square Terminal captured more than the order total across multiple checkouts. Payment IDs: pay_partial, pay_full. Refund may be required.', $order->notes );
@@ -285,7 +288,10 @@ final class CheckoutReconcilerTest extends TestCase {
 			$order
 		);
 
-		self::assertTrue( $order->paid );
+		self::assertFalse( $order->paid );
+		self::assertSame( 0, $order->payment_complete_calls );
+		self::assertSame( 'on-hold', $order->get_status() );
+		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_payment_ids' ) );
 		self::assertSame( 0, $order->get_meta( '_sqtwc_tip_amount' ) );
 		self::assertSame( array( 'pay_partial', 'pay_full' ), $order->get_meta( '_sqtwc_duplicate_payment_ids' ) );
 		self::assertStringContainsString( 'refund may be required', strtolower( $result['cashier_message'] ) );
