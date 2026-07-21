@@ -124,6 +124,10 @@ final class SquareErrorMapper {
 	private function result( bool $retriable, string $message, array $context, ?int $http_status = null ): array {
 		unset( $context['transport'] );
 
+		// 'code' is redacted by Logger, which cannot distinguish a Square error
+		// code from a Terminal pairing code. Alias it so failures stay legible.
+		$context['error_code'] = (string) ( $context['code'] ?? '' );
+
 		return array(
 			'retriable'       => $retriable,
 			'http_status'     => $http_status ?? ( $retriable ? 502 : 400 ),

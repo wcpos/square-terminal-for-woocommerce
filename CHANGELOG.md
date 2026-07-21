@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.3.1] - 2026-07-22
+
+### Fixed
+
+- **No Square API call has ever succeeded from a distributed build.** The Square SDK locates an HTTP client through `php-http/discovery`, which searches for well-known class names — php-scoper rewrites those names, and no concrete PSR-18 client was in the dependency tree at all. Every request threw `NotFoundException` before it was sent, surfacing as "Unable to reach Square". A PSR-18 client is now a runtime dependency and is passed to the SDK explicitly, bypassing discovery. Affects Terminal payments, device discovery, and settings validation alike.
+- The scoped-vendor autoloader used a hand-maintained namespace map, so a newly added dependency was silently unloadable in the built plugin. It is now generated from Composer's own autoload data and the build fails if the result cannot load the SDK and its HTTP client.
+- Square failures were logged with the error code and HTTP status redacted, because the log redactor matched any key containing `code` — including `error_code` and `status_code`. Diagnostic fields are no longer redacted; Terminal pairing codes still are.
+- Removed the duplicate webhook URL input from the Terminal pairing row, which repeated the Webhook Notification URL setting shown directly above it.
+- Square requests now use a bounded 10-second timeout.
+- Updated `symfony/http-foundation` to clear CVE-2026-48736.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added

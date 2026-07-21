@@ -30,15 +30,24 @@ final class AdminUiTest extends TestCase {
 		);
 	}
 
-	public function test_admin_ui_shows_exact_webhook_url_help_and_device_buttons(): void {
-		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'webhook_notification_url' => 'https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook' );
+	public function test_admin_ui_shows_the_pairing_controls(): void {
+		$html = Gateway::render_admin_fields();
+
+		self::assertStringContainsString( 'Create Device Code', $html );
+		self::assertStringContainsString( 'Validate Settings', $html );
+		self::assertStringContainsString( 'sqtwc-admin-status', $html );
+	}
+
+	public function test_pairing_row_does_not_duplicate_the_webhook_url_field(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'webhook_notification_url' => 'https://example.test/wp-json/sqtwc/v1/webhook' );
 		Settings::reset_cache_for_tests();
 
 		$html = Gateway::render_admin_fields();
 
-		self::assertStringContainsString( 'exactly match Square Developer Dashboard', $html );
-		self::assertStringContainsString( 'https://dev-pro.wcpos.com/wp-json/sqtwc/v1/webhook', $html );
-		self::assertStringContainsString( 'Create Device Code', $html );
+		// The Webhook Notification URL is its own settings field directly above
+		// this row; repeating it here as a second input was confusing.
+		self::assertStringNotContainsString( 'https://example.test/wp-json/sqtwc/v1/webhook', $html );
+		self::assertStringNotContainsString( '<input', $html );
 	}
 
 	public function test_admin_js_calls_device_code_and_validation_endpoints(): void {

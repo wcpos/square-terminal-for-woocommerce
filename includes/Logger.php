@@ -27,6 +27,18 @@ final class Logger {
 	);
 
 	/**
+	 * Keys that are always safe to log, checked before SECRET_KEYS.
+	 *
+	 * These are error taxonomy fields, not credentials. They collide with the
+	 * 'code' needle above, which is there to redact Terminal pairing codes.
+	 */
+	private const DIAGNOSTIC_KEYS = array(
+		'error_code',
+		'status_code',
+		'http_status',
+	);
+
+	/**
 	 * Sanitize log context recursively.
 	 *
 	 * @param array<string,mixed> $context Raw log context.
@@ -117,6 +129,14 @@ final class Logger {
 	 */
 	private static function is_secret_key( string $key ): bool {
 		$key = strtolower( $key );
+
+		// Diagnostic fields whose names merely contain a secret-ish substring.
+		// Redacting these hides the reason a Square call failed and leaves the
+		// operator with nothing but a generic message.
+		if ( in_array( $key, self::DIAGNOSTIC_KEYS, true ) ) {
+			return false;
+		}
+
 		foreach ( self::SECRET_KEYS as $needle ) {
 			if ( str_contains( $key, $needle ) ) {
 				return true;

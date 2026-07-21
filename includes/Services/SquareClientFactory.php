@@ -8,6 +8,7 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\GuzzleHttp\Client as HttpClient;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\SquareClient;
 
 /**
@@ -15,7 +16,19 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\SquareClient;
  */
 final class SquareClientFactory {
 	/**
+	 * Request timeout in seconds.
+	 *
+	 * Bounded so a slow Square response cannot hold a checkout render open.
+	 */
+	private const TIMEOUT = 10;
+
+	/**
 	 * Create a Square SDK client.
+	 *
+	 * The PSR-18 client is passed explicitly. The Square SDK otherwise resolves
+	 * one through php-http/discovery, which scans for well-known class names —
+	 * php-scoper rewrites those names in the distributed build, so discovery
+	 * finds nothing and every request throws before it is sent.
 	 *
 	 * @param string|null $access_token Square access token override.
 	 * @param string|null $environment  Square environment override.
@@ -27,7 +40,10 @@ final class SquareClientFactory {
 		return new SquareClient(
 			$access_token,
 			null,
-			array( 'baseUrl' => Settings::get_base_url_for( $environment ) )
+			array(
+				'baseUrl' => Settings::get_base_url_for( $environment ),
+				'client'  => new HttpClient( array( 'timeout' => self::TIMEOUT ) ),
+			)
 		);
 	}
 }
