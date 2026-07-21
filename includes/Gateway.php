@@ -18,7 +18,7 @@ class Gateway extends \WC_Payment_Gateway {
 		$this->id                 = 'sqtwc';
 		$this->method_title       = __( 'Square Terminal', 'square-terminal-for-woocommerce' );
 		$this->method_description = __( 'Collect in-person payments with Square Terminal.', 'square-terminal-for-woocommerce' );
-		$this->has_fields         = false;
+		$this->has_fields         = true;
 
 		$this->init_form_fields();
 		$this->init_settings();
