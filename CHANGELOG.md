@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.2.2] - 2026-07-21
+
+### Fixed
+
+- Render the Square Terminal device selector and payment controls on WCPOS/order-pay checkouts while keeping the interactive controls hidden before standard checkout creates an order.
+
 ## [0.2.1] - 2026-07-16
 
 ### Fixed

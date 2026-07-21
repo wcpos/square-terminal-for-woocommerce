@@ -9,6 +9,7 @@ if ( ! class_exists( 'WC_Payment_Gateway' ) ) {
 		protected array $settings = array();
 		public function init_form_fields(): void {}
 		public function init_settings(): void {}
+		public function has_fields() { return $this->has_fields; }
 		public function get_option( $key, $default = '' ) { return $this->settings[ $key ] ?? $default; }
 		public function process_admin_options() { return true; }
 		public function get_return_url( $order = null ) { return '/thank-you'; }

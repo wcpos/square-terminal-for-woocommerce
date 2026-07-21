@@ -18,13 +18,23 @@ class Gateway extends \WC_Payment_Gateway {
 		$this->id                 = 'sqtwc';
 		$this->method_title       = __( 'Square Terminal', 'square-terminal-for-woocommerce' );
 		$this->method_description = __( 'Collect in-person payments with Square Terminal.', 'square-terminal-for-woocommerce' );
-		$this->has_fields         = false;
+		$this->has_fields         = true;
 
 		$this->init_form_fields();
 		$this->init_settings();
 
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_assets' ) );
+	}
+
+	/**
+	 * Whether the current request has interactive payment fields.
+	 *
+	 * Evaluate this at render time because WooCommerce may instantiate its
+	 * gateway singleton before WordPress has parsed the order-pay query.
+	 */
+	public function has_fields() {
+		return 0 < self::current_pay_order_id();
 	}
 
 	/**
@@ -306,7 +316,12 @@ class Gateway extends \WC_Payment_Gateway {
 	 * render and a reloaded page re-attaches to any in-flight attempt.
 	 */
 	public function payment_fields(): void {
-		echo self::render_payment_ui( self::current_pay_order_id(), array() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML is escaped in render method.
+		$order_id = self::current_pay_order_id();
+		if ( ! $order_id ) {
+			return;
+		}
+
+		echo self::render_payment_ui( $order_id, array() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML is escaped in render method.
 	}
 
 	/**
