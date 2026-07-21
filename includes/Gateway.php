@@ -608,18 +608,13 @@ class Gateway extends \WC_Payment_Gateway {
 	 */
 	public static function render_admin_fields(): string {
 		return sprintf(
-			// No name attribute: this mirrors the Webhook Notification URL setting
-			// for copying into Square and must not post back into the settings form.
-			'<p>%1$s</p><input class="sqtwc-webhook-url" value="%2$s" readonly />'
-			. '<button type="button" class="button" id="sqtwc-create-device-code">%3$s</button> '
-			. '<button type="button" class="button" id="sqtwc-validate-settings">%4$s</button>'
+			'<button type="button" class="button" id="sqtwc-create-device-code">%1$s</button> '
+			. '<button type="button" class="button" id="sqtwc-validate-settings">%2$s</button>'
 			. '<p id="sqtwc-admin-status" class="sqtwc-admin__status" role="status" aria-live="polite"></p>'
-			. '<p class="description">%5$s</p>',
-			esc_html__( 'Webhook notification URL must exactly match Square Developer Dashboard.', 'square-terminal-for-woocommerce' ),
-			esc_attr( Settings::get_webhook_notification_url() ),
+			. '<p class="description">%3$s</p>',
 			esc_html__( 'Create Device Code', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Validate Settings', 'square-terminal-for-woocommerce' ),
-			esc_html__( 'Use dev-pro.wcpos.com for hosted Square Sandbox validation.', 'square-terminal-for-woocommerce' )
+			esc_html__( 'Create Device Code returns a code to enter on the Terminal. Validate Settings checks the credentials and location above against Square.', 'square-terminal-for-woocommerce' )
 		);
 	}
 
