@@ -25,11 +25,32 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		WooCommerceSquareHints::reset_cache_for_tests();
 	}
 
-	public function test_no_hints_when_the_official_plugin_is_absent(): void {
+	public function test_no_hints_when_the_official_plugin_accessor_returns_a_null_handler(): void {
 		$hints = WooCommerceSquareHints::detect();
 
 		self::assertSame( '', $hints['location_id'] );
 		self::assertFalse( WooCommerceSquareHints::has_hints() );
+	}
+
+	public function test_no_hints_when_the_official_plugin_accessor_is_not_defined(): void {
+		$autoload = dirname( __DIR__, 2 ) . '/vendor/autoload.php';
+		$class    = WooCommerceSquareHints::class;
+		$code     = 'require ' . var_export( $autoload, true ) . '; '
+			. '$class = ' . var_export( $class, true ) . '; '
+			. 'echo json_encode( array( "accessor_exists" => function_exists( "wc_square" ), "hints" => $class::detect() ) );';
+		$output   = array();
+		$status   = 0;
+
+		exec( escapeshellarg( PHP_BINARY ) . ' -r ' . escapeshellarg( $code ) . ' 2>&1', $output, $status );
+
+		self::assertSame( 0, $status, implode( "\n", $output ) );
+		self::assertSame(
+			array(
+				'accessor_exists' => false,
+				'hints'           => array( 'environment' => '', 'location_id' => '' ),
+			),
+			json_decode( implode( "\n", $output ), true )
+		);
 	}
 
 	public function test_reads_production_location_from_the_settings_option(): void {
@@ -96,7 +117,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		self::assertSame( 'LFROMAPI', $hints['location_id'] );
 	}
 
-	public function test_option_location_uses_the_public_api_environment(): void {
+	public function test_option_snapshot_replaces_the_api_pair_when_location_is_missing(): void {
 		$GLOBALS['sqtwc_options']['wc_square_settings'] = array(
 			'enable_sandbox'         => 'no',
 			'production_location_id' => 'LPRODUCTION',
@@ -106,11 +127,11 @@ final class WooCommerceSquareHintsTest extends TestCase {
 
 		$hints = WooCommerceSquareHints::detect();
 
-		self::assertSame( 'sandbox', $hints['environment'] );
-		self::assertSame( 'LSANDBOX', $hints['location_id'] );
+		self::assertSame( 'production', $hints['environment'] );
+		self::assertSame( 'LPRODUCTION', $hints['location_id'] );
 	}
 
-	public function test_option_fills_a_missing_environment_without_replacing_the_api_location(): void {
+	public function test_option_snapshot_replaces_the_api_pair_when_environment_is_missing(): void {
 		$GLOBALS['sqtwc_options']['wc_square_settings'] = array(
 			'enable_sandbox'      => 'yes',
 			'sandbox_location_id' => 'LFROMOPTION',
@@ -120,7 +141,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		$hints = WooCommerceSquareHints::detect();
 
 		self::assertSame( 'sandbox', $hints['environment'] );
-		self::assertSame( 'LFROMAPI', $hints['location_id'] );
+		self::assertSame( 'LFROMOPTION', $hints['location_id'] );
 	}
 
 	#[RunInSeparateProcess]

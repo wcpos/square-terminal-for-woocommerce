@@ -47,7 +47,12 @@ final class WooCommerceSquareHints {
 		$hints = self::from_public_api();
 
 		if ( '' === $hints['environment'] || '' === $hints['location_id'] ) {
-			$hints = self::from_option( $hints );
+			$hints = self::from_option(
+				array(
+					'environment' => '',
+					'location_id' => '',
+				)
+			);
 		}
 
 		self::$hints = $hints;
