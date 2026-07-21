@@ -23,6 +23,14 @@ class Gateway extends \WC_Payment_Gateway {
 	private const EMPTY_DEVICE_CACHE_TTL = 30;
 
 	/**
+	 * Last-known-good device list lifetime in seconds.
+	 *
+	 * Bounded rather than permanent: WordPress autoloads transients stored with
+	 * no expiry, so an unbounded fallback would sit in memory on every request.
+	 */
+	private const LAST_KNOWN_GOOD_TTL = 86400;
+
+	/**
 	 * Gateway constructor.
 	 */
 	public function __construct() {
@@ -119,8 +127,8 @@ class Gateway extends \WC_Payment_Gateway {
 	/**
 	 * Register and enqueue the cashier payment assets with localized data.
 	 *
-	 * Enqueued on the order-pay page and anywhere a POS context opts in via the
-	 * `sqtwc_enqueue_payment_assets` filter. The localized data
+	 * Enqueued on the order-pay page and checkout, and anywhere a POS context
+	 * opts in via the `sqtwc_enqueue_payment_assets` filter. The localized data
 	 * carries every dynamic string, the AJAX contract, and the device list so
 	 * the JavaScript stays dependency-free and fully translatable.
 	 */
@@ -153,7 +161,10 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Decide whether the current request should load the cashier assets.
 	 */
 	private function should_enqueue_payment_assets(): bool {
-		$should = function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page();
+		// Both branches are load-bearing: 0.2.2 restored the cashier controls on
+		// WCPOS checkouts, which are not always is_checkout_pay_page().
+		$should = ( function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() )
+			|| ( function_exists( 'is_checkout' ) && is_checkout() );
 
 		/**
 		 * Filter whether the Square Terminal cashier assets should load.
@@ -252,7 +263,7 @@ class Gateway extends \WC_Payment_Gateway {
 				try {
 					$devices = ( new SquareDeviceAdapter( ( new SquareClientFactory() )->create() ) )->list_paired_devices( $location_id );
 					set_transient( $cache_key, $devices, empty( $devices ) ? self::EMPTY_DEVICE_CACHE_TTL : self::DEVICE_CACHE_TTL );
-					set_transient( $stale_cache_key, $devices );
+					set_transient( $stale_cache_key, $devices, self::LAST_KNOWN_GOOD_TTL );
 				} catch ( Throwable $exception ) {
 					$mapped = ( new SquareErrorMapper() )->map( $exception );
 					Logger::error( 'Square device discovery failed', $mapped['log_context'] );

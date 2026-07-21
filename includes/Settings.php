@@ -84,10 +84,19 @@ final class Settings {
 	}
 
 	/**
-	 * Return Square API base URL.
+	 * Return Square API base URL for the configured environment.
 	 */
 	public static function get_base_url(): string {
-		return 'production' === self::get_environment() ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com';
+		return self::get_base_url_for( self::get_environment() );
+	}
+
+	/**
+	 * Return the Square API base URL for a specific environment.
+	 *
+	 * @param string $environment Square environment.
+	 */
+	public static function get_base_url_for( string $environment ): string {
+		return 'production' === $environment ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com';
 	}
 
 	/**

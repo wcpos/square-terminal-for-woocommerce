@@ -27,7 +27,7 @@ final class SquareClientFactory {
 		return new SquareClient(
 			$access_token,
 			null,
-			array( 'baseUrl' => 'production' === $environment ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com' )
+			array( 'baseUrl' => Settings::get_base_url_for( $environment ) )
 		);
 	}
 }

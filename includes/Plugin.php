@@ -126,10 +126,8 @@ final class Plugin {
 			return;
 		}
 
-		$environment = isset( $request['environment'] ) && 'production' === sanitize_text_field( $request['environment'] ) ? 'production' : ( isset( $request['environment'] ) ? 'sandbox' : Settings::get_environment() );
-		$access_token = isset( $request['access_token'] ) ? sanitize_text_field( $request['access_token'] ) : Settings::get_access_token();
-		$location_id = isset( $request['location_id'] ) ? sanitize_text_field( $request['location_id'] ) : Settings::get_location_id();
-		if ( '' === $location_id ) {
+		$credentials = $this->resolve_admin_credentials( $request );
+		if ( '' === $credentials['location_id'] ) {
 			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
 			return;
 		}
@@ -141,9 +139,9 @@ final class Plugin {
 		}
 
 		try {
-			$result = $this->create_device_adapter( $access_token, $environment )->create_device_code(
+			$result = $this->create_device_adapter( $credentials['access_token'], $credentials['environment'] )->create_device_code(
 				array(
-					'location_id'     => $location_id,
+					'location_id'     => $credentials['location_id'],
 					'name'            => $name,
 					'idempotency_key' => wp_generate_uuid4(),
 				)
@@ -152,7 +150,7 @@ final class Plugin {
 				throw new \UnexpectedValueException( 'Square returned an empty device code.' );
 			}
 
-			Gateway::delete_device_cache( $environment, $location_id );
+			Gateway::delete_device_cache( $credentials['environment'], $credentials['location_id'] );
 			$this->send_ajax_response(
 				array(
 					'status'  => 200,
@@ -176,16 +174,14 @@ final class Plugin {
 			return;
 		}
 
-		$environment = isset( $request['environment'] ) && 'production' === sanitize_text_field( $request['environment'] ) ? 'production' : ( isset( $request['environment'] ) ? 'sandbox' : Settings::get_environment() );
-		$access_token = isset( $request['access_token'] ) ? sanitize_text_field( $request['access_token'] ) : Settings::get_access_token();
-		$location_id = isset( $request['location_id'] ) ? sanitize_text_field( $request['location_id'] ) : Settings::get_location_id();
-		if ( '' === $location_id ) {
+		$credentials = $this->resolve_admin_credentials( $request );
+		if ( '' === $credentials['location_id'] ) {
 			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
 			return;
 		}
 
 		try {
-			$this->create_device_adapter( $access_token, $environment )->validate_location( $location_id );
+			$this->create_device_adapter( $credentials['access_token'], $credentials['environment'] )->validate_location( $credentials['location_id'] );
 			$this->send_ajax_response(
 				array(
 					'status'  => 200,
@@ -283,11 +279,39 @@ final class Plugin {
 	 * @return SquareDeviceAdapter|object
 	 */
 	private function create_device_adapter( ?string $access_token = null, ?string $environment = null ) {
-		if ( null === $this->device_adapter ) {
-			$this->device_adapter = new SquareDeviceAdapter( ( new SquareClientFactory() )->create( $access_token, $environment ) );
+		if ( null !== $this->device_adapter ) {
+			return $this->device_adapter;
 		}
 
-		return $this->device_adapter;
+		// Deliberately not memoized: callers pass per-request credentials, and a
+		// cached adapter would answer a later call with the first call's client.
+		return new SquareDeviceAdapter( ( new SquareClientFactory() )->create( $access_token, $environment ) );
+	}
+
+	/**
+	 * Resolve Square credentials for an admin request.
+	 *
+	 * The settings form posts its current values so the pairing controls act on
+	 * what the administrator can see, falling back to the saved settings when a
+	 * value is absent or blank.
+	 *
+	 * @param array<string,mixed> $request Request data.
+	 * @return array{environment:string,access_token:string,location_id:string}
+	 */
+	private function resolve_admin_credentials( array $request ): array {
+		$posted_environment = sanitize_text_field( (string) ( $request['environment'] ?? '' ) );
+		$environment        = in_array( $posted_environment, array( 'sandbox', 'production' ), true )
+			? $posted_environment
+			: Settings::get_environment();
+
+		$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
+		$location_id  = sanitize_text_field( (string) ( $request['location_id'] ?? '' ) );
+
+		return array(
+			'environment'  => $environment,
+			'access_token' => '' !== $access_token ? $access_token : (string) Settings::get( $environment . '_access_token', '' ),
+			'location_id'  => '' !== $location_id ? $location_id : Settings::get_location_id(),
+		);
 	}
 
 	/**
