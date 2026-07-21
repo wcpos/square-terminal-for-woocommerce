@@ -8,6 +8,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 final class PaymentAssetsTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array();
+		$GLOBALS['sqtwc_transients'] = array();
 		Settings::reset_cache_for_tests();
 	}
 
@@ -25,8 +26,37 @@ final class PaymentAssetsTest extends TestCase {
 		}
 	}
 
-	public function test_production_device_list_is_empty_pending_pairing(): void {
-		self::assertSame( array(), Gateway::get_available_devices( 'production' ) );
+	public function test_production_device_list_uses_environment_and_location_cache(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array(
+			'value'      => array( array( 'id' => 'device_1', 'label' => 'Front' ) ),
+			'expiration' => 300,
+		);
+
+		self::assertSame(
+			array( array( 'id' => 'device_1', 'label' => 'Front' ) ),
+			Gateway::get_available_devices( 'production' )
+		);
+	}
+
+	public function test_saving_gateway_settings_clears_cached_devices(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment' => 'production',
+			'location_id' => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array(), 'expiration' => 300 );
+
+		( new Gateway() )->process_admin_options();
+
+		self::assertArrayNotHasKey( $key, $GLOBALS['sqtwc_transients'] );
 	}
 
 	public function test_localized_payment_data_carries_ajax_contract(): void {

@@ -11,6 +11,8 @@ use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 
 /**
@@ -26,6 +28,9 @@ final class Plugin {
 	/** @var PaymentSweeper|object|null */
 	private $payment_sweeper;
 
+	/** @var SquareDeviceAdapter|object|null */
+	private $device_adapter;
+
 	/** @var OrderLock */
 	private OrderLock $order_lock;
 
@@ -36,12 +41,14 @@ final class Plugin {
 	 * @param WebhookHandler|object|null  $webhook_handler  Optional injected webhook handler.
 	 * @param PaymentSweeper|object|null  $payment_sweeper  Optional injected payment sweeper.
 	 * @param OrderLock|null              $order_lock       Optional shared order lock.
+	 * @param SquareDeviceAdapter|object|null $device_adapter Optional injected Device Code adapter.
 	 */
-	public function __construct( $ajax_handler = null, $webhook_handler = null, $payment_sweeper = null, ?OrderLock $order_lock = null ) {
+	public function __construct( $ajax_handler = null, $webhook_handler = null, $payment_sweeper = null, ?OrderLock $order_lock = null, $device_adapter = null ) {
 		$this->ajax_handler    = $ajax_handler;
 		$this->webhook_handler = $webhook_handler;
 		$this->payment_sweeper = $payment_sweeper;
 		$this->order_lock      = $order_lock ?? new OrderLock();
+		$this->device_adapter  = $device_adapter;
 	}
 
 	/**
@@ -57,6 +64,8 @@ final class Plugin {
 		add_action( 'wp_ajax_nopriv_sqtwc_cancel_terminal_checkout', array( $this, 'ajax_cancel_terminal_checkout' ) );
 		add_action( 'wp_ajax_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
+		add_action( 'wp_ajax_sqtwc_create_device_code', array( $this, 'ajax_create_device_code' ) );
+		add_action( 'wp_ajax_sqtwc_validate_settings', array( $this, 'ajax_validate_settings' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		$this->create_payment_sweeper()->register();
@@ -103,6 +112,84 @@ final class Plugin {
 	 */
 	public function ajax_detach_terminal_checkout(): void {
 		$this->send_ajax_response( $this->create_ajax_handler()->detach_terminal_checkout( $this->get_ajax_request_data() ) );
+	}
+
+	/**
+	 * Create a Terminal pairing code from an authenticated admin request.
+	 */
+	public function ajax_create_device_code(): void {
+		$request = $this->get_ajax_request_data();
+		$error   = $this->authorize_admin_request( $request );
+		if ( null !== $error ) {
+			$this->send_ajax_response( $error );
+			return;
+		}
+
+		$location_id = Settings::get_location_id();
+		if ( '' === $location_id ) {
+			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
+			return;
+		}
+
+		$name = sanitize_text_field( $request['name'] ?? '' );
+		if ( '' === $name ) {
+			/* translators: %s: Store name. */
+			$name = sprintf( __( '%s Terminal', 'square-terminal-for-woocommerce' ), get_bloginfo( 'name' ) );
+		}
+
+		try {
+			$result = $this->create_device_adapter()->create_device_code(
+				array(
+					'location_id'     => $location_id,
+					'name'            => $name,
+					'idempotency_key' => wp_generate_uuid4(),
+				)
+			);
+			if ( empty( $result['code'] ) ) {
+				throw new \UnexpectedValueException( 'Square returned an empty device code.' );
+			}
+
+			Gateway::delete_device_cache( Settings::get_environment(), $location_id );
+			$this->send_ajax_response(
+				array(
+					'status'  => 200,
+					'success' => true,
+					'code'    => (string) $result['code'],
+				)
+			);
+		} catch ( Throwable $exception ) {
+			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
+		}
+	}
+
+	/**
+	 * Verify configured Square credentials and location.
+	 */
+	public function ajax_validate_settings(): void {
+		$request = $this->get_ajax_request_data();
+		$error   = $this->authorize_admin_request( $request );
+		if ( null !== $error ) {
+			$this->send_ajax_response( $error );
+			return;
+		}
+
+		$location_id = Settings::get_location_id();
+		if ( '' === $location_id ) {
+			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
+			return;
+		}
+
+		try {
+			$this->create_device_adapter()->validate_location( $location_id );
+			$this->send_ajax_response(
+				array(
+					'status'  => 200,
+					'success' => true,
+				)
+			);
+		} catch ( Throwable $exception ) {
+			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
+		}
 	}
 
 	/**
@@ -186,6 +273,19 @@ final class Plugin {
 	}
 
 	/**
+	 * Create or return the configured Device Code adapter.
+	 *
+	 * @return SquareDeviceAdapter|object
+	 */
+	private function create_device_adapter() {
+		if ( null === $this->device_adapter ) {
+			$this->device_adapter = new SquareDeviceAdapter( ( new SquareClientFactory() )->create() );
+		}
+
+		return $this->device_adapter;
+	}
+
+	/**
 	 * Create or return the configured webhook handler.
 	 *
 	 * @return WebhookHandler|object
@@ -217,7 +317,57 @@ final class Plugin {
 	 * @return array<string,mixed>
 	 */
 	private function get_ajax_request_data(): array {
-		return (array) wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce is verified by AjaxHandler for authenticated users.
+		return (array) wp_unslash( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- Nonce is verified by the receiving handler.
+	}
+
+	/**
+	 * Authorize an admin-only AJAX request.
+	 *
+	 * @param array<string,mixed> $request Request data.
+	 * @return array<string,mixed>|null
+	 */
+	private function authorize_admin_request( array $request ): ?array {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			return $this->admin_error_response( 403, __( 'You are not allowed to manage WooCommerce settings.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		if ( ! wp_verify_nonce( $request['_wpnonce'] ?? '', 'sqtwc_admin' ) ) {
+			return $this->admin_error_response( 403, __( 'Invalid nonce.', 'square-terminal-for-woocommerce' ) );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Map a Square exception into a safe admin response.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function mapped_admin_error_response( Throwable $exception ): array {
+		$mapped = ( new SquareErrorMapper() )->map( $exception );
+		Logger::error( 'Square admin request failed', $mapped['log_context'] );
+
+		$error_code = (string) $mapped['log_context']['code'];
+
+		return array(
+			'status'          => $mapped['http_status'],
+			'error_code'      => '' !== $error_code ? $error_code : 'square_error',
+			'cashier_message' => $mapped['cashier_message'],
+			'retriable'       => $mapped['retriable'],
+		);
+	}
+
+	/**
+	 * Build a local admin error response.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function admin_error_response( int $status, string $message ): array {
+		return array(
+			'status'          => $status,
+			'cashier_message' => $message,
+			'retriable'       => false,
+		);
 	}
 
 	/**

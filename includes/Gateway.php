@@ -7,10 +7,18 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
+
 /**
  * Square Terminal payment gateway.
  */
 class Gateway extends \WC_Payment_Gateway {
+	/** Device discovery transient lifetime in seconds. */
+	private const DEVICE_CACHE_TTL = 300;
+
 	/**
 	 * Gateway constructor.
 	 */
@@ -25,6 +33,75 @@ class Gateway extends \WC_Payment_Gateway {
 
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_assets' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
+	}
+
+	/**
+	 * Enqueue the pairing controls script on this gateway's settings screen.
+	 *
+	 * The script is dependency-free and receives the AJAX contract, the admin
+	 * nonce, and every dynamic string through wp_localize_script.
+	 */
+	public function enqueue_admin_assets(): void {
+		if ( ! self::is_gateway_settings_screen() ) {
+			return;
+		}
+
+		wp_register_script(
+			'sqtwc-admin',
+			PLUGIN_URL . 'assets/js/admin.js',
+			array(),
+			VERSION,
+			true
+		);
+
+		wp_localize_script(
+			'sqtwc-admin',
+			'sqtwcAdmin',
+			array(
+				'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+				'nonce'   => wp_create_nonce( 'sqtwc_admin' ),
+				'strings' => array(
+					'working'      => __( 'Working…', 'square-terminal-for-woocommerce' ),
+					/* translators: %s: Square Terminal pairing code. */
+					'pairingCode'  => __( 'Pairing code: %s — enter it on the Terminal within 5 minutes.', 'square-terminal-for-woocommerce' ),
+					'settingsOk'   => __( 'Square credentials and location verified.', 'square-terminal-for-woocommerce' ),
+					'requestError' => __( 'The request could not be completed.', 'square-terminal-for-woocommerce' ),
+				),
+			)
+		);
+
+		wp_enqueue_script( 'sqtwc-admin' );
+	}
+
+	/**
+	 * Whether the current admin request is this gateway's settings section.
+	 */
+	private static function is_gateway_settings_screen(): bool {
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Read-only screen detection, no state change.
+		$page    = isset( $_GET['page'] ) ? sanitize_text_field( wp_unslash( $_GET['page'] ) ) : '';
+		$tab     = isset( $_GET['tab'] ) ? sanitize_text_field( wp_unslash( $_GET['tab'] ) ) : '';
+		$section = isset( $_GET['section'] ) ? sanitize_text_field( wp_unslash( $_GET['section'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		return 'wc-settings' === $page && 'checkout' === $tab && 'sqtwc' === $section;
+	}
+
+	/**
+	 * Save gateway settings and invalidate device discovery for old and new keys.
+	 *
+	 * @return mixed
+	 */
+	public function process_admin_options() {
+		$old_environment = Settings::get_environment();
+		$old_location_id = Settings::get_location_id();
+		$result          = parent::process_admin_options();
+
+		Settings::reset_cache();
+		self::delete_device_cache( $old_environment, $old_location_id );
+		self::delete_device_cache( Settings::get_environment(), Settings::get_location_id() );
+
+		return $result;
 	}
 
 	/**
@@ -125,8 +202,8 @@ class Gateway extends \WC_Payment_Gateway {
 	 *
 	 * In sandbox the list is Square's documented magic test device IDs labeled
 	 * by scenario so every UI state can be exercised without hardware. In
-	 * production the list is empty for now (Phase 2 device pairing); the
-	 * JavaScript falls back to a temporary manual-entry field.
+	 * production the list is discovered from paired Terminal API Device Codes.
+	 * The JavaScript retains its manual-entry fallback when none are available.
 	 *
 	 * @param string $environment Active Square environment.
 	 * @return array<int,array<string,string>>
@@ -157,12 +234,51 @@ class Gateway extends \WC_Payment_Gateway {
 			);
 		}
 
+		$location_id = Settings::get_location_id();
+		$devices     = array();
+
+		if ( '' !== $location_id && '' !== Settings::get_access_token() ) {
+			$cache_key = self::get_device_cache_key( $environment, $location_id );
+			$cached    = get_transient( $cache_key );
+			if ( false !== $cached ) {
+				$devices = (array) $cached;
+			} else {
+				try {
+					$devices = ( new SquareDeviceAdapter( ( new SquareClientFactory() )->create() ) )->list_paired_devices( $location_id );
+					set_transient( $cache_key, $devices, self::DEVICE_CACHE_TTL );
+				} catch ( Throwable $exception ) {
+					$mapped = ( new SquareErrorMapper() )->map( $exception );
+					Logger::error( 'Square device discovery failed', $mapped['log_context'] );
+				}
+			}
+		}
+
 		/**
-		 * Filter the production device list until Phase 2 pairing lands.
+		 * Filter the production device list.
 		 *
 		 * @param array<int,array<string,string>> $devices Paired devices.
 		 */
-		return (array) apply_filters( 'sqtwc_available_devices', array() );
+		return (array) apply_filters( 'sqtwc_available_devices', $devices );
+	}
+
+	/**
+	 * Build the environment- and location-specific device cache key.
+	 *
+	 * @param string $environment Active Square environment.
+	 * @param string $location_id Square location ID.
+	 */
+	public static function get_device_cache_key( string $environment, string $location_id ): string {
+		return 'sqtwc_devices_' . md5( $environment . '|' . $location_id );
+	}
+
+	/**
+	 * Delete a cached device discovery result.
+	 *
+	 * @param string $environment Active Square environment.
+	 * @param string $location_id Square location ID.
+	 */
+	public static function delete_device_cache( string $environment, string $location_id ): void {
+		delete_transient( self::get_device_cache_key( $environment, $location_id ) );
 	}
 
 	/**
@@ -267,6 +383,10 @@ class Gateway extends \WC_Payment_Gateway {
 				'title'       => __( 'Webhook Notification URL', 'square-terminal-for-woocommerce' ),
 				'type'        => 'text',
 				'description' => __( 'Must exactly match the URL configured in Square Developer Dashboard.', 'square-terminal-for-woocommerce' ),
+			),
+			'terminal_pairing'         => array(
+				'title' => __( 'Terminal pairing', 'square-terminal-for-woocommerce' ),
+				'type'  => 'terminal_pairing',
 			),
 
 			// --- Workstream B (cashier frontend) settings. Kept in a distinct block to minimize merge conflicts with parallel workstreams. ---
@@ -468,12 +588,38 @@ class Gateway extends \WC_Payment_Gateway {
 	 */
 	public static function render_admin_fields(): string {
 		return sprintf(
-			'<p>%1$s</p><input class="sqtwc-webhook-url" name="webhook_notification_url" value="%2$s" /><button id="sqtwc-create-device-code">%3$s</button><button id="sqtwc-validate-settings">%4$s</button><p>%5$s</p>',
+			// No name attribute: this mirrors the Webhook Notification URL setting
+			// for copying into Square and must not post back into the settings form.
+			'<p>%1$s</p><input class="sqtwc-webhook-url" value="%2$s" readonly />'
+			. '<button type="button" class="button" id="sqtwc-create-device-code">%3$s</button> '
+			. '<button type="button" class="button" id="sqtwc-validate-settings">%4$s</button>'
+			. '<p id="sqtwc-admin-status" class="sqtwc-admin__status" role="status" aria-live="polite"></p>'
+			. '<p class="description">%5$s</p>',
 			esc_html__( 'Webhook notification URL must exactly match Square Developer Dashboard.', 'square-terminal-for-woocommerce' ),
 			esc_attr( Settings::get_webhook_notification_url() ),
 			esc_html__( 'Create Device Code', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Validate Settings', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Use dev-pro.wcpos.com for hosted Square Sandbox validation.', 'square-terminal-for-woocommerce' )
+		);
+	}
+
+	/**
+	 * Render the pairing controls as a WooCommerce settings row.
+	 *
+	 * WooCommerce resolves a field's `type` to `generate_{type}_html()`, so this
+	 * is what puts render_admin_fields() on the gateway settings screen.
+	 *
+	 * @param string              $key  Field key.
+	 * @param array<string,mixed> $data Field definition.
+	 * @return string
+	 */
+	public function generate_terminal_pairing_html( $key, $data ): string {
+		$title = isset( $data['title'] ) ? (string) $data['title'] : '';
+
+		return sprintf(
+			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			esc_html( $title ),
+			self::render_admin_fields()
 		);
 	}
 }

@@ -19,10 +19,17 @@ final class Settings {
 	private static ?array $settings = null;
 
 	/**
+	 * Reset the memoized settings after gateway options change.
+	 */
+	public static function reset_cache(): void {
+		self::$settings = null;
+	}
+
+	/**
 	 * Reset settings cache for tests.
 	 */
 	public static function reset_cache_for_tests(): void {
-		self::$settings = null;
+		self::reset_cache();
 	}
 
 	/**
