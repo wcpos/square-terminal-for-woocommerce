@@ -1,9 +1,21 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+
+final class FailingSquareClientFactory {
+	public static int $calls = 0;
+
+	public function create(): object {
+		++self::$calls;
+		throw new \RuntimeException( 'Square unavailable' );
+	}
+}
 
 final class PaymentAssetsTest extends TestCase {
 	protected function setUp(): void {
@@ -45,6 +57,28 @@ final class PaymentAssetsTest extends TestCase {
 		);
 	}
 
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_production_device_list_uses_last_known_good_devices_after_discovery_failure(): void {
+		class_alias( FailingSquareClientFactory::class, SquareClientFactory::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key     = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$devices = array( array( 'id' => 'device_1', 'label' => 'Front' ) );
+		$GLOBALS['sqtwc_transients'][ $key . '_last_known_good' ] = array(
+			'value'      => $devices,
+			'expiration' => 0,
+		);
+
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+		self::assertSame( 1, FailingSquareClientFactory::$calls );
+	}
+
 	public function test_saving_gateway_settings_clears_cached_devices(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
 			'environment' => 'production',
@@ -53,10 +87,12 @@ final class PaymentAssetsTest extends TestCase {
 		Settings::reset_cache_for_tests();
 		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
 		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array(), 'expiration' => 300 );
+		$GLOBALS['sqtwc_transients'][ $key . '_last_known_good' ] = array( 'value' => array(), 'expiration' => 0 );
 
 		( new Gateway() )->process_admin_options();
 
 		self::assertArrayNotHasKey( $key, $GLOBALS['sqtwc_transients'] );
+		self::assertArrayNotHasKey( $key . '_last_known_good', $GLOBALS['sqtwc_transients'] );
 	}
 
 	public function test_localized_payment_data_carries_ajax_contract(): void {

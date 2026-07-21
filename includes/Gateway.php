@@ -238,14 +238,20 @@ class Gateway extends \WC_Payment_Gateway {
 		$devices     = array();
 
 		if ( '' !== $location_id && '' !== Settings::get_access_token() ) {
-			$cache_key = self::get_device_cache_key( $environment, $location_id );
-			$cached    = get_transient( $cache_key );
+			$cache_key       = self::get_device_cache_key( $environment, $location_id );
+			$stale_cache_key = $cache_key . '_last_known_good';
+			$cached          = get_transient( $cache_key );
 			if ( false !== $cached ) {
 				$devices = (array) $cached;
 			} else {
+				$stale_devices = get_transient( $stale_cache_key );
+				$devices       = false === $stale_devices ? array() : (array) $stale_devices;
+				set_transient( $cache_key, $devices, self::DEVICE_CACHE_TTL );
+
 				try {
 					$devices = ( new SquareDeviceAdapter( ( new SquareClientFactory() )->create() ) )->list_paired_devices( $location_id );
 					set_transient( $cache_key, $devices, self::DEVICE_CACHE_TTL );
+					set_transient( $stale_cache_key, $devices );
 				} catch ( Throwable $exception ) {
 					$mapped = ( new SquareErrorMapper() )->map( $exception );
 					Logger::error( 'Square device discovery failed', $mapped['log_context'] );
@@ -278,7 +284,9 @@ class Gateway extends \WC_Payment_Gateway {
 	 * @param string $location_id Square location ID.
 	 */
 	public static function delete_device_cache( string $environment, string $location_id ): void {
-		delete_transient( self::get_device_cache_key( $environment, $location_id ) );
+		$cache_key = self::get_device_cache_key( $environment, $location_id );
+		delete_transient( $cache_key );
+		delete_transient( $cache_key . '_last_known_good' );
 	}
 
 	/**
