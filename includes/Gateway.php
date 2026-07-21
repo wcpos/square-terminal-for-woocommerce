@@ -78,6 +78,13 @@ class Gateway extends \WC_Payment_Gateway {
 					'pairingCode'  => __( 'Pairing code: %s — enter it on the Terminal within 5 minutes.', 'square-terminal-for-woocommerce' ),
 					'settingsOk'   => __( 'Square credentials and location verified.', 'square-terminal-for-woocommerce' ),
 					'requestError' => __( 'The request could not be completed.', 'square-terminal-for-woocommerce' ),
+					'pairedTitle'  => __( 'Paired with this plugin — selectable at checkout', 'square-terminal-for-woocommerce' ),
+					'accountTitle' => __( 'Other Terminals on this Square account', 'square-terminal-for-woocommerce' ),
+					'nonePaired'   => __( 'No Terminals are paired with this plugin yet. Use Create Device Code to pair one.', 'square-terminal-for-woocommerce' ),
+					'noneAtAll'    => __( 'Square reports no Terminals at this location.', 'square-terminal-for-woocommerce' ),
+					'accountNote'  => __( 'These are visible to Square but were paired elsewhere, so they cannot be selected at checkout until paired with this plugin.', 'square-terminal-for-woocommerce' ),
+					/* translators: 1: number of Terminals paired with this plugin, 2: number of other Terminals on the account. */
+					'readersFound' => __( 'Found %1$d paired and %2$d other Terminal(s).', 'square-terminal-for-woocommerce' ),
 				),
 			)
 		);
@@ -250,12 +257,31 @@ class Gateway extends \WC_Payment_Gateway {
 		$location_id = Settings::get_location_id();
 		$devices     = array();
 
-		if ( '' !== $location_id && '' !== Settings::get_access_token() ) {
+		if ( '' === $location_id || '' === Settings::get_access_token() ) {
+			// Silence here is indistinguishable from a check that ran and found
+			// nothing, which is exactly what made an empty selector impossible
+			// to diagnose. Every outcome of discovery is logged.
+			Logger::info(
+				'Square device discovery skipped',
+				array(
+					'environment'  => $environment,
+					'reason'       => '' === $location_id ? 'no_location_id' : 'no_access_token',
+				)
+			);
+		} else {
 			$cache_key       = self::get_device_cache_key( $environment, $location_id );
 			$stale_cache_key = $cache_key . '_last_known_good';
 			$cached          = get_transient( $cache_key );
 			if ( false !== $cached ) {
 				$devices = (array) $cached;
+				Logger::info(
+					'Square device discovery served from cache',
+					array(
+						'environment' => $environment,
+						'location_id' => $location_id,
+						'count'       => count( $devices ),
+					)
+				);
 			} else {
 				$stale_devices = get_transient( $stale_cache_key );
 				$devices       = false === $stale_devices ? array() : (array) $stale_devices;
@@ -265,6 +291,14 @@ class Gateway extends \WC_Payment_Gateway {
 					$devices = ( new SquareDeviceAdapter( ( new SquareClientFactory() )->create() ) )->list_paired_devices( $location_id );
 					set_transient( $cache_key, $devices, empty( $devices ) ? self::EMPTY_DEVICE_CACHE_TTL : self::DEVICE_CACHE_TTL );
 					set_transient( $stale_cache_key, $devices, self::LAST_KNOWN_GOOD_TTL );
+					Logger::info(
+						'Square device discovery completed',
+						array(
+							'environment' => $environment,
+							'location_id' => $location_id,
+							'count'       => count( $devices ),
+						)
+					);
 				} catch ( Throwable $exception ) {
 					$mapped = ( new SquareErrorMapper() )->map( $exception );
 					Logger::error( 'Square device discovery failed', $mapped['log_context'] );
@@ -625,13 +659,16 @@ class Gateway extends \WC_Payment_Gateway {
 	 */
 	public static function render_admin_fields(): string {
 		return sprintf(
-			'<button type="button" class="button" id="sqtwc-create-device-code">%1$s</button> '
-			. '<button type="button" class="button" id="sqtwc-validate-settings">%2$s</button>'
+			'<button type="button" class="button" id="sqtwc-check-readers">%1$s</button> '
+			. '<button type="button" class="button" id="sqtwc-create-device-code">%2$s</button> '
+			. '<button type="button" class="button" id="sqtwc-validate-settings">%3$s</button>'
 			. '<p id="sqtwc-admin-status" class="sqtwc-admin__status" role="status" aria-live="polite"></p>'
-			. '<p class="description">%3$s</p>',
+			. '<div id="sqtwc-reader-list" class="sqtwc-admin__readers"></div>'
+			. '<p class="description">%4$s</p>',
+			esc_html__( 'Check for readers', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Create Device Code', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Validate Settings', 'square-terminal-for-woocommerce' ),
-			esc_html__( 'Create Device Code returns a code to enter on the Terminal. Validate Settings checks the credentials and location above against Square.', 'square-terminal-for-woocommerce' )
+			esc_html__( 'Check for readers lists the Terminals Square knows about. Create Device Code returns a code to enter on the Terminal. Validate Settings checks the credentials and location above against Square.', 'square-terminal-for-woocommerce' )
 		);
 	}
 

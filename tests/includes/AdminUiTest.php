@@ -71,8 +71,27 @@ final class AdminUiTest extends TestCase {
 
 		// Inside the WooCommerce settings <form>, a button without an explicit
 		// type defaults to submit and would save the settings page instead.
+		// Asserted as a ratio rather than a count so adding a control cannot
+		// silently reintroduce a submitting button.
 		self::assertStringNotContainsString( '<button id=', $html );
-		self::assertSame( 2, substr_count( $html, 'type="button"' ) );
+		self::assertGreaterThan( 0, substr_count( $html, '<button' ) );
+		self::assertSame( substr_count( $html, '<button' ), substr_count( $html, 'type="button"' ) );
+	}
+
+	public function test_reader_list_controls_are_present(): void {
+		$html = Gateway::render_admin_fields();
+
+		self::assertStringContainsString( 'sqtwc-check-readers', $html );
+		self::assertStringContainsString( 'sqtwc-reader-list', $html );
+	}
+
+	public function test_admin_js_renders_readers_without_html_interpolation(): void {
+		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
+
+		self::assertStringContainsString( 'sqtwc_list_devices', $js );
+		// Device names come from Square; they must never be written as markup.
+		self::assertStringContainsString( 'textContent', $js );
+		self::assertStringNotContainsString( 'innerHTML', $js );
 	}
 
 	public function test_pairing_field_is_registered_on_the_gateway(): void {
