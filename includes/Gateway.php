@@ -306,7 +306,12 @@ class Gateway extends \WC_Payment_Gateway {
 	 * render and a reloaded page re-attaches to any in-flight attempt.
 	 */
 	public function payment_fields(): void {
-		echo self::render_payment_ui( self::current_pay_order_id(), array() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML is escaped in render method.
+		$order_id = self::current_pay_order_id();
+		if ( ! $order_id ) {
+			return;
+		}
+
+		echo self::render_payment_ui( $order_id, array() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML is escaped in render method.
 	}
 
 	/**
