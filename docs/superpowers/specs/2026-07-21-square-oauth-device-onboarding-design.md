@@ -137,7 +137,7 @@ mode remains usable.
 |---|---|
 | `GET /capabilities` | Return protocol version and production/sandbox availability without secrets |
 | `POST /sessions` | Validate the WordPress callback, store a short-lived OAuth handshake, return the Square authorization URL |
-| `GET /callback` | Verify broker state, seal Square's authorization code behind a one-time ticket, and redirect to WordPress |
+| `GET /callback` | Verify broker state; seal an allowed authorization code behind a one-time ticket or return a bounded denial code; redirect to WordPress |
 | `POST /exchange` | Verify the PKCE verifier, exchange the sealed code, and replay the token package until acknowledged |
 | `POST /exchange/ack` | Delete a replayable pending exchange only after WordPress confirms durable encrypted storage |
 | `POST /refresh` | Validate the WCPOS connection credential, idempotently refresh the Square token, return rotated credentials |
@@ -176,16 +176,21 @@ connection credential is logged.
    challenge, and the fixed WCPOS Square redirect URI.
    Production authorization sets `session=false` so an existing Square browser
    session cannot silently select an account.
-5. `/callback` atomically consumes broker state, seals Square's authorization
-   code with the stored challenge/callback data, and stores it behind a random
-   five-minute ticket. It does not exchange the code before WordPress proves
-   possession of the PKCE verifier.
-6. The browser is redirected to the original WordPress callback with only the
-   one-time ticket and `client_state`.
+5. `/callback` validates and atomically consumes broker state for both Square
+   outcomes. On Allow, it seals the authorization code with the stored
+   challenge/callback data and stores it behind a random five-minute ticket. It
+   does not exchange the code before WordPress proves possession of the PKCE
+   verifier. On `access_denied`, it creates no ticket and discards Square's
+   free-form error description.
+6. The browser is redirected to the original WordPress callback with
+   `client_state` and exactly one of the one-time ticket or the bounded
+   `oauth_denied` code. WordPress verifies state, clears the connection attempt,
+   and returns to Square settings with a safe failure notice on denial.
 7. WordPress verifies the stored state, then `/exchange` proves the original
    verifier, exchanges the sealed authorization code using Square PKCE with
-   `short_lived=true`, verifies the exact scopes, and retrieves merchant and
-   active-location data. Before responding, the broker stores an encrypted
+   `short_lived=true`, calls RetrieveTokenStatus with the returned access token,
+   verifies its exact scopes, and retrieves merchant and active-location data.
+   Before responding, the broker stores an encrypted
    `pending_exchange` result keyed by ticket, verifier proof, and client
    idempotency key.
 8. Before publishing an exchange result, the broker durably stores the rotating
@@ -226,7 +231,8 @@ has a bounded lifetime renewed during token refresh. Signing supports an active
 and previous key so broker-key rotation does not disconnect every merchant.
 
 The plugin schedules maintenance twice daily, refreshes a 24-hour Square access
-token when six hours or less remain, refreshes on demand before an operation
+token when twelve hours or less remain so one full scheduled interval remains,
+refreshes on demand before an operation
 when necessary, and retries once on an authentication-expired API response. One
 per-environment WordPress mutation lock serializes refresh, OAuth activation,
 reconnect, method switch, location/credential mutation, and disconnect. Every
@@ -325,6 +331,15 @@ refresh capability, revokes the newly returned access token, and does not
 activate the connection. Broker wall-clock time is never used for this
 comparison.
 
+When an authenticated operation or scheduled sweep finds a watermark mismatch,
+an internal per-connection fenced cleanup path remains callable even though
+normal routes fail authorization. It moves the connection to
+`reconnect_required`, deletes that connection's refresh vault and token-bearing
+operation/replay records, revokes every known access token, and finalizes
+`revoked`. A crash or provider failure leaves the same cleanup resumable, and a
+later authorization whose immutable provider time exceeds the watermark is not
+included.
+
 An ordinary site disconnect sends the locally held current access token only in
 that authenticated server-to-server request. In one fenced Lua transition, the
 broker stores it encrypted in the bounded disconnect operation record, enters
@@ -404,7 +419,11 @@ Before forwarding, it verifies:
 - redirects are disabled.
 
 The forwarded request includes connection ID, Unix timestamp, event ID, relay
-key ID, and an HMAC over timestamp, connection ID, callback path, and raw body.
+key ID, and an HMAC over one canonical payload. In fixed order, that payload is
+timestamp, connection ID, callback path, event ID, key ID, and the exact raw
+body; each UTF-8 value is encoded as its decimal byte length, a colon, then its
+bytes. Tests alter each event-ID and key-ID header independently and require
+verification failure.
 The per-site HMAC key is derived with versioned HKDF key material and the full
 connection ID. `/exchange`, `/refresh`, and authenticated `/heartbeat` responses
 distribute the active key ID/key and, during rotation, the previous key ID/key

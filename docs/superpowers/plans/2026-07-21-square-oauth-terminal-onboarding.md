@@ -52,9 +52,9 @@ Each PR must target the repository's current main branch and name the companion 
 - Create: src/lib/square-broker/origin-policy.test.ts
 
 **Interfaces:**
-- Produces: SquareEnvironment, BrokerEnvelope, ConnectionClaims, ConnectionRecord, SafeMerchant, SafeLocation, OAuthHandshake, ExchangeTicket, broker-internal SquareTokenPackage/RefreshTokenVaultRecord, and RelayKeySet.
+- Produces: SquareEnvironment, BrokerEnvelope, ConnectionClaims, ConnectionRecord, SafeMerchant, SafeLocation, SafeTokenStatus, OAuthHandshake, ExchangeTicket, broker-internal SquareTokenPackage/RefreshTokenVaultRecord, and RelayKeySet.
 - Produces: squareConfig(environment), sealJson(value), openJson(value), signConnectionCredential(claims), verifyConnectionCredential(value).
-- Produces: validateWordPressCallback(url, environment, resolveDns).
+- Produces: validateWordPressCallback(url, environment, resolveDns, isPublicAddress).
 - Consumes later: every broker route and store in Tasks 2–4.
 
 - [ ] **Step 1: Add failing configuration and cryptography tests**
@@ -87,11 +87,16 @@ Test callback rejection for credentials, fragments, non-HTTPS production URLs, I
 
 ~~~ts
 it('rejects mixed public and private DNS answers', async () => {
+  const isPublicAddress = vi.fn(
+    (address: string) => address === '203.0.113.8',
+  )
+
   await expect(
     validateWordPressCallback(
       'https://shop.example/wp-json/sqtwc/v1/oauth/callback',
       'production',
       async () => ['203.0.113.8', '127.0.0.1'],
+      isPublicAddress,
     ),
   ).rejects.toThrowError('callback_not_public')
 })
@@ -180,6 +185,13 @@ export interface SafeLocation {
   timezone: string
 }
 
+export interface SafeTokenStatus {
+  scopes: string[]
+  expiresAt: number
+  clientId: string
+  merchantId: string
+}
+
 export interface SquareTokenPackage {
   accessToken: string
   refreshToken: string
@@ -187,7 +199,6 @@ export interface SquareTokenPackage {
   refreshTokenExpiresAt: number
   shortLived: true
   merchantId: string
-  scopes: string[]
 }
 
 export interface RefreshTokenVaultRecord {
@@ -408,7 +419,7 @@ export interface SquareBrokerStore {
 
 - [ ] **Step 4: Write failing Square client and OAuth service tests**
 
-Mock fetch and cover the fixed permission list, production session=false, PKCE challenge/verifier, short_lived=true on ObtainToken requests, validation that the response says short_lived=true, rotating refresh-token expiry, Square code exchange without sending the app secret, granted-scope equality, merchant retrieval, active-location pagination, safe Square error mapping, and no raw response logging.
+Mock fetch and cover the fixed permission list, production session=false, PKCE challenge/verifier, short_lived=true on ObtainToken requests, validation that the response says short_lived=true, rotating refresh-token expiry, Square code exchange without sending the app secret, RetrieveTokenStatus and granted-scope equality, merchant retrieval, active-location pagination, safe Square error mapping, and no raw response logging.
 
 ~~~ts
 expect(authorizeUrl.searchParams.get('scope')).toBe(
@@ -425,6 +436,7 @@ Use existing global fetch, explicit Square-Version, eight-second AbortSignal tim
 ~~~ts
 exchangeAuthorizationCode(input): Promise<SquareTokenPackage>
 refreshToken(input): Promise<SquareTokenPackage>
+retrieveTokenStatus(accessToken): Promise<SafeTokenStatus>
 revokeToken(input: { accessToken: string; revokeOnlyAccessToken: true }): Promise<void>
 getMerchant(accessToken): Promise<SafeMerchant>
 listLocations(accessToken): Promise<SafeLocation[]>
@@ -433,7 +445,7 @@ verifyWebhookSignature(rawBody, signature, environment): boolean
 
 - [ ] **Step 6: Implement OAuth session, callback, and exchange service**
 
-Session input is a strict Zod object containing environment, callbackUrl, clientState, and verifierChallenge. The caller cannot supply scopes. Callback atomically consumes state and seals the authorization code without exchanging it. Exchange verifies the PKCE verifier, creates a pending operation under the client idempotency key, calls Square with short_lived=true, requires the response's short_lived field to be true, derives providerAuthorizedAt from expiresAt minus exactly 86,400 seconds, creates a random 128-bit base64url connection ID, then calls `createConnectionIfAuthorized`. That single Lua operation reads the current Square-event revocation watermark, requires providerAuthorizedAt to be strictly greater, and atomically creates the connection and generation-one encrypted refresh vault without using broker wall-clock time. Exchange then stores a replayable encrypted result that excludes the refresh token and returns only:
+Session input is a strict Zod object containing environment, callbackUrl, clientState, and verifierChallenge. The caller cannot supply scopes. Callback atomically consumes state and seals the authorization code without exchanging it. A verified `access_denied` callback instead redirects to the stored WordPress callback with `client_state` and the bounded `oauth_denied` code; it creates no ticket and never forwards Square's error description. Exchange verifies the PKCE verifier, creates a pending operation under the client idempotency key, calls Square with short_lived=true, requires the response's short_lived field to be true, calls RetrieveTokenStatus with the returned access token, requires exact granted-scope equality, derives providerAuthorizedAt from expiresAt minus exactly 86,400 seconds, creates a random 128-bit base64url connection ID, then calls `createConnectionIfAuthorized`. That single Lua operation reads the current Square-event revocation watermark, requires providerAuthorizedAt to be strictly greater, and atomically creates the connection and generation-one encrypted refresh vault without using broker wall-clock time. Exchange then stores a replayable encrypted result that excludes the refresh token and returns only:
 
 ~~~ts
 export interface ExchangeResponse {
@@ -453,7 +465,7 @@ Assert the serialized response has no `refreshToken` or `refreshTokenExpiresAt` 
 
 - [ ] **Step 7: Implement and test the five route handlers**
 
-Every route validates content type and body size, uses a stable BrokerEnvelope, creates a request ID, applies per-IP and per-origin rate limits, and returns 503 when Redis/rate limiting is unavailable for a mutation. capabilities returns protocolVersion: 1 plus sandbox/production availability booleans and no secret-derived values.
+Every route uses a stable BrokerEnvelope, creates a request ID, and applies per-IP and per-origin rate limits. JSON mutation routes validate content type and body size; GET callback/capabilities routes validate only their query inputs and emit no request body. A mutation returns 503 when Redis/rate limiting is unavailable. capabilities returns protocolVersion: 1 plus sandbox/production availability booleans and no secret-derived values.
 
 ~~~ts
 export async function GET(): Promise<NextResponse<BrokerEnvelope<CapabilitiesResponse>>>
@@ -529,7 +541,7 @@ Use deferred promises around the Square client and assert:
 6. A lost response replays byte-for-byte under the same idempotency key.
 7. Acknowledgement deletes replay state only after generation matches.
 8. Missing replay state fails closed instead of refreshing again.
-9. Lease expiry plus a newer fence prevents the stale worker from committing; a returned token is revoked.
+9. Lease expiry plus a newer fence, or a watermark advance while the Square refresh call is pending, prevents the worker from committing; the returned token is revoked and never published.
 10. Site A disconnect does not affect Site B for the same merchant.
 11. Only the operation key that changed active to disconnecting can retry.
 12. A refresh that returns after disconnect starts has its new token revoked.
@@ -539,6 +551,7 @@ Use deferred promises around the Square client and assert:
 16. Broker wall clocks ahead of and behind Square produce the same providerAuthorizedAt, an exact watermark tie fails closed, and refresh never advances the original value.
 17. Disconnect atomically deletes the vault entry before remote access-token revocation; after that transition neither broker refresh nor a WordPress-held secret can call Square ObtainToken.
 18. A snapshot taken before disconnect and restored afterward is sanitized before capabilities are enabled: refresh is rejected, every restored vault/operation secret is purged, and Square ObtainToken is never called.
+19. A watermark mismatch enters fenced cleanup even though normal routes fail authorization, deletes that connection's vault and token-bearing operation records, and resumes idempotently after a crash.
 
 ~~~ts
 expect(siteA.status).toBe('revoked')
@@ -589,7 +602,7 @@ export interface RefreshOperation {
 }
 ~~~
 
-Acquire a monotonic fence when taking the per-connection Redis lease. Read and decrypt the refresh token only from the durable vault. Persist `prepared`, then persist `provider_started`, before the provider call; recovery may resume only `prepared`, while `provider_started` is indeterminate and must never call Square again. Every post-Square Lua commit validates connection status, input connection generation, input vault generation, operation ID, and fence. The successful commit atomically replaces the encrypted vault entry with Square's rotated refresh token and persists an encrypted replay response containing only the access token. Persist that response before revoking oldAccessToken. Return only in ready. Retain ready until POST refresh/ack proves operation ID and output generation, or until the returned access token expires. If the result is indeterminate, delete the live vault entry, move to reconnect_required, and revoke all known access tokens. Preserve `providerAuthorizedAt` exactly across every refresh. Do not describe Redis deletion as cryptographic erasure because encrypted copies can remain in protected backups.
+Acquire a monotonic fence when taking the per-connection Redis lease. Read and decrypt the refresh token only from the durable vault. Persist `prepared`, then persist `provider_started`, before the provider call; recovery may resume only `prepared`, while `provider_started` is indeterminate and must never call Square again. Every post-Square Lua commit validates connection status, input connection generation, input vault generation, operation ID, and fence. In that same operation, it reads the current merchant/environment revocation watermark and requires the immutable `providerAuthorizedAt` to be strictly greater. If any check fails, leave the vault and replay state unchanged and revoke the returned token. The successful commit atomically replaces the encrypted vault entry with Square's rotated refresh token and persists an encrypted replay response containing only the access token. Persist that response before revoking oldAccessToken. Return only in ready. Retain ready until POST refresh/ack proves operation ID and output generation, or until the returned access token expires. If the result is indeterminate, delete the live vault entry, move to reconnect_required, and revoke all known access tokens. Preserve `providerAuthorizedAt` exactly across every refresh. Do not describe Redis deletion as cryptographic erasure because encrypted copies can remain in protected backups.
 
 - [ ] **Step 4: Implement disconnecting state**
 
@@ -723,21 +736,25 @@ The PR body must state that the durable Redis registry is security authority, re
 
 - [ ] **Step 1: Write failing signature, SSRF, and routing tests**
 
-Cover exact Square signature URL/raw-body verification, malformed reference IDs, merchant/environment mismatch, route-cache eviction, revoked/unknown connections, event deduplication, relay key overlap, site 2xx/4xx/429/5xx mapping, redirect rejection, proxy-env bypass, private IPv4/IPv6, and DNS rebinding. Route tests must also prove that a verified `oauth.authorization.revoked` event calls `advanceRevokedBefore` with its environment, merchant ID, and event creation time before returning 200, while a failed watermark update returns 503.
+Cover exact Square signature URL/raw-body verification, relay event-ID/key-ID header tampering, malformed reference IDs, merchant/environment mismatch, route-cache eviction, revoked/unknown connections, event deduplication, relay key overlap, site 2xx/4xx/429/5xx mapping, redirect rejection, proxy-env bypass, private IPv4/IPv6, and DNS rebinding. Route tests must also prove that a verified `oauth.authorization.revoked` event calls `advanceRevokedBefore` with its environment, merchant ID, and event creation time before returning 200, while a failed watermark update returns 503.
 
 ~~~ts
-it('pins the validated address even if DNS changes before connect', async () => {
-  const resolver = vi.fn()
+it('does not resolve again between validation and connect', async () => {
+  const resolveDns = vi.fn()
     .mockResolvedValueOnce(['198.51.100.20'])
     .mockResolvedValueOnce(['127.0.0.1'])
 
   await pinnedHttpsPost({
     url: 'https://shop.example/wp-json/sqtwc/v1/relay',
-    resolver,
-    body: '{}',
+    resolveDns,
+    isPublicAddress: (address) => address === '198.51.100.20',
+    body: Buffer.from('{}'),
     headers: {},
+    timeoutMs: 8_000,
+    maxResponseBytes: 65_536,
   })
 
+  expect(resolveDns).toHaveBeenCalledTimes(1)
   expect(mockHttpsRequest).toHaveBeenCalledWith(
     expect.objectContaining({
       hostname: '198.51.100.20',
@@ -759,7 +776,7 @@ Expected: FAIL because relay modules do not exist.
 
 - [ ] **Step 3: Implement reference parsing and relay key rotation**
 
-Accept only sq_ plus a 22-character base64url routing ID plus underscore plus a 1–13 character lowercase base36 order ID. Decode to a positive 64-bit-safe decimal string without JavaScript Number truncation. Derive per-site HMAC keys with versioned HKDF. Sign timestamp, connection ID, callback path, event ID, relay key ID, and raw body. Return active plus bounded previous keys through exchange/refresh/heartbeat.
+Accept only sq_ plus a 22-character base64url routing ID plus underscore plus a 1–13 character lowercase base36 order ID. Decode to a positive 64-bit-safe decimal string without JavaScript Number truncation. Derive per-site HMAC keys with versioned HKDF. `signRelayRequest` signs one canonical payload: timestamp, connection ID, callback path, event ID, `key.id`, and the exact raw body, in that order, with every UTF-8 value encoded as its decimal byte length, a colon, then its bytes. The same values are sent as headers where applicable. Return active plus bounded previous keys through exchange/refresh/heartbeat.
 
 ~~~ts
 export function parseCheckoutReference(value: string): {
@@ -793,8 +810,12 @@ export function pinnedHttpsPost(input: {
   body: Buffer
   timeoutMs: number
   maxResponseBytes: number
+  resolveDns?: (hostname: string) => Promise<string[]>
+  isPublicAddress?: (address: string) => boolean
 }): Promise<PinnedHttpsResponse>
 ~~~
+
+The optional resolver and classifier are dependency-injection seams for tests; production callers omit them and use the Node DNS resolver and strict public-address classifier.
 
 - [ ] **Step 5: Implement webhook service response rules**
 
@@ -806,7 +827,7 @@ export function pinnedHttpsPost(input: {
 - Permanent destination 4xx except 429: acknowledge 202 after safe log.
 - DNS/network/timeout/429/5xx: 503.
 
-Only terminal.checkout.updated is relayed in the first release. `handleSquareWebhook` dispatches a verified `oauth.authorization.revoked` event to `advanceRevokedBefore` with its environment, merchant ID, and event creation time before acknowledging it. The store advances the merchant/environment revoked-before watermark atomically; every connection authorized at or before that watermark fails closed. If the store operation fails, return 503 so Square retries.
+Only terminal.checkout.updated is relayed in the first release. `handleSquareWebhook` dispatches a verified `oauth.authorization.revoked` event to `advanceRevokedBefore` with its environment, merchant ID, and event creation time before acknowledging it. The store advances the merchant/environment revoked-before watermark atomically; every connection authorized at or before that watermark fails closed. The handler then invokes the same idempotent maintenance cleanup used by scheduled recovery. For each mismatched connection, that internal path takes a per-connection fence without passing the normal authorization guard, moves the record to `reconnect_required`, deletes its refresh vault and token-bearing operation/replay records, revokes every known access token, and finalizes `revoked`; a crash leaves cleanup resumable. If the watermark or cleanup operation fails, return 503 so Square retries. Tests prove cleanup remains reachable after normal routes reject the mismatch and cannot affect a later reauthorization.
 
 ~~~ts
 export function relayOutcomeStatus(outcome: RelayOutcome): number {
@@ -1075,7 +1096,7 @@ disconnect(array $connection, string $operation_id): array
 
 - [ ] **Step 4: Write failing OAuth/controller tests**
 
-Test manage_woocommerce and nonce requirements, ten-minute client state/PKCE verifier/exchange-operation transient, fixed callback URL, pending exchange replay after response loss, acknowledgement only after local atomic persistence, pending connection after exchange, explicit Use this Square account confirmation, production session=false broker handoff, exact official WooCommerce Square location hint only, cross-merchant second confirmation, one mutation lock/fence, stale callback/refresh CAS rejection, open-attempt guard, OpenSSL-unavailable managed mode fail-closed with manual mode usable, no WordPress persistence/request/log contains a refresh token, and no remote mutation on page render.
+Test manage_woocommerce and nonce requirements, ten-minute client state/PKCE verifier/exchange-operation transient, fixed callback URL, safe OAuth denial cleanup, pending exchange replay after response loss, acknowledgement only after local atomic persistence, pending connection after exchange, explicit Use this Square account confirmation, production session=false broker handoff, exact official WooCommerce Square location hint only, cross-merchant second confirmation, one mutation lock/fence, stale callback/refresh CAS rejection, open-attempt guard, OpenSSL-unavailable managed mode fail-closed with manual mode usable, no WordPress persistence/request/log contains a refresh token, and no remote mutation on page render.
 
 ~~~php
 public function test_exchange_stays_pending_until_explicit_merchant_confirmation(): void {
@@ -1103,7 +1124,7 @@ wp_ajax_sqtwc_square_switch_manual
 REST GET /sqtwc/v1/oauth/callback
 ~~~
 
-The callback accepts only ticket and client_state, verifies the administrator-bound transient, exchanges server-to-server using the stored PKCE verifier and stable exchange operation ID, rejects a response containing any refresh-token field, atomically stores the access-token-only connection as pending_ack with the ticket/operation identity, acknowledges the broker exchange, and redirects to the Square settings page without secrets. If persistence or acknowledgement fails, retrying the same callback replays the same broker result and never reuses the Square authorization code. Merchant activation remains disabled until acknowledgement succeeds.
+The callback accepts `client_state` plus exactly one of `ticket` or the bounded `oauth_denied` error code and verifies the administrator-bound transient. On denial it clears the local connection attempt and redirects to Square settings with a safe notice; it never calls exchange. With a ticket it exchanges server-to-server using the stored PKCE verifier and stable exchange operation ID, rejects a response containing any refresh-token field, atomically stores the access-token-only connection as pending_ack with the ticket/operation identity, acknowledges the broker exchange, and redirects to the Square settings page without secrets. If persistence or acknowledgement fails, retrying the same callback replays the same broker result and never reuses the Square authorization code. Merchant activation remains disabled until acknowledgement succeeds.
 
 - [ ] **Step 6: Implement and crash-test durable activation and disconnect transitions**
 
@@ -1140,7 +1161,7 @@ return $this->lock->with_lock(
 
 - [ ] **Step 7: Implement transition recovery, scheduled credential maintenance, and the Square operation runner**
 
-Register a twice-daily sqtwc_square_connection_maintenance event. Under ConnectionLock, first recover any durable transition intent to completion or fail closed on corrupt/ambiguous state. Then retry any durable pending exchange acknowledgement and move pending_ack to pending only after broker confirmation. Refresh an OAuth record when its 24-hour access token has six hours or less remaining; SquareOperationRunner performs the same check on demand before an operation. Use the stable refresh operation ID until refresh/ack completes, persist only the returned access token and expiry, and alert when maintenance misses the six-hour threshold or enters reconnect_required. SquareOperationRunner receives an already resolved exact connection record, refreshes proactively, invokes the operation with a client, and retries exactly once after SquareErrorMapper classifies an authentication-expired response. Manual records never call the broker.
+Register a twice-daily sqtwc_square_connection_maintenance event. Under ConnectionLock, first recover any durable transition intent to completion or fail closed on corrupt/ambiguous state. Then retry any durable pending exchange acknowledgement and move pending_ack to pending only after broker confirmation. Refresh an OAuth record when its 24-hour access token has twelve hours or less remaining, leaving one full scheduled interval as a buffer; SquareOperationRunner performs the same check on demand before an operation. Use the stable refresh operation ID until refresh/ack completes, persist only the returned access token and expiry, and alert when maintenance reaches expiry without completing refresh or enters reconnect_required. SquareOperationRunner receives an already resolved exact connection record, refreshes proactively, invokes the operation with a client, and retries exactly once after SquareErrorMapper classifies an authentication-expired response. Manual records never call the broker.
 
 ~~~php
 public function run(array $connection, callable $operation) {
@@ -1288,7 +1309,7 @@ public function list_devices(?string $cursor = null): array;
 public function create_device_code(array $data): array;
 ~~~
 
-Normalized Device Code fields are id, name, code, device_id, product_type, status, location_id, created_at, updated_at, and expires_at. Normalized monitoring fields are monitoring_id, name, model, manufacturers_id, status, location_id, and updated_at.
+Normalized Device Code fields are id, name, code, device_id, product_type, status, location_id, created_at, status_changed_at, and pair_by. Normalized monitoring fields are monitoring_id, name, model, manufacturers_id, status, location_id, and updated_at. Pairing expiry and duplicate ordering use Square's `pair_by` and `status_changed_at` fields directly.
 
 - [ ] **Step 5: Write the normalization matrix before implementation**
 
