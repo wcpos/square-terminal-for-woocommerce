@@ -367,6 +367,9 @@ Tests must prove:
 - ticket begins one exchange operation only when verifier proof and idempotency key match;
 - a committed pending-exchange result replays byte-for-byte until acknowledgement;
 - connection creation is NX and generation starts at 1;
+- connection creation reads the current merchant/environment revocation watermark,
+  rejects `providerAuthorizedAt` at or below it, and creates the authorization
+  and encrypted refresh-vault records in one Lua operation;
 - authorization and encrypted refresh-vault records have no TTL;
 - exchange publication is impossible until the connection and encrypted vault
   entry are both durable;
@@ -393,7 +396,7 @@ export interface SquareBrokerStore {
   createTicket(value: ExchangeTicket): Promise<void>
   beginExchange(ticket: string, verifierHash: string, operationId: string): Promise<ExchangeTicket | PendingExchange | null>
   acknowledgeExchange(ticket: string, operationId: string, generation: number): Promise<boolean>
-  createConnection(record: ConnectionRecord, vault: RefreshTokenVaultRecord): Promise<boolean>
+  createConnectionIfAuthorized(record: ConnectionRecord, vault: RefreshTokenVaultRecord): Promise<boolean>
   getConnection(id: string): Promise<ConnectionRecord | null>
   getRefreshVault(id: string): Promise<RefreshTokenVaultRecord | null>
   compareAndSetConnection(expected: ConnectionRecord, next: ConnectionRecord): Promise<boolean>
@@ -430,7 +433,7 @@ verifyWebhookSignature(rawBody, signature, environment): boolean
 
 - [ ] **Step 6: Implement OAuth session, callback, and exchange service**
 
-Session input is a strict Zod object containing environment, callbackUrl, clientState, and verifierChallenge. The caller cannot supply scopes. Callback atomically consumes state and seals the authorization code without exchanging it. Exchange verifies the PKCE verifier, creates a pending operation under the client idempotency key, calls Square with short_lived=true, requires the response's short_lived field to be true, derives providerAuthorizedAt from expiresAt minus exactly 86,400 seconds, checks the Square-event revocation watermark without using broker wall-clock time, creates a random 128-bit base64url connection ID, atomically stores the encrypted refresh token in the durable vault with generation one, stores a replayable encrypted result that excludes the refresh token, and returns only:
+Session input is a strict Zod object containing environment, callbackUrl, clientState, and verifierChallenge. The caller cannot supply scopes. Callback atomically consumes state and seals the authorization code without exchanging it. Exchange verifies the PKCE verifier, creates a pending operation under the client idempotency key, calls Square with short_lived=true, requires the response's short_lived field to be true, derives providerAuthorizedAt from expiresAt minus exactly 86,400 seconds, creates a random 128-bit base64url connection ID, then calls `createConnectionIfAuthorized`. That single Lua operation reads the current Square-event revocation watermark, requires providerAuthorizedAt to be strictly greater, and atomically creates the connection and generation-one encrypted refresh vault without using broker wall-clock time. Exchange then stores a replayable encrypted result that excludes the refresh token and returns only:
 
 ~~~ts
 export interface ExchangeResponse {
@@ -446,7 +449,7 @@ export interface ExchangeResponse {
 }
 ~~~
 
-Assert the serialized response has no `refreshToken` or `refreshTokenExpiresAt` key. If Square returns but the post-token fence/watermark check fails, delete any vault entry, revoke the returned access token, and do not create a connection. An equal watermark is revoked; malformed short-lived metadata fails closed. Tests set the broker clock both ahead of and behind Square and prove the derived provider authorization time is unchanged. If the process dies in the exact response-before-persistence window, mark the ticket indeterminate on recovery and require a new authorization; never call Square again with that code. POST exchange/ack deletes replay state only after WordPress confirms the matching generation is durable.
+Assert the serialized response has no `refreshToken` or `refreshTokenExpiresAt` key. If Square returns but the atomic create rejects the post-token fence/watermark check, delete any vault entry, revoke the returned access token, and do not create a connection. An equal watermark is revoked; malformed short-lived metadata fails closed. Tests race a watermark advance between the token response and connection creation and prove the atomic create rejects it. Tests also set the broker clock both ahead of and behind Square and prove the derived provider authorization time is unchanged. If the process dies in the exact response-before-persistence window, mark the ticket indeterminate on recovery and require a new authorization; never call Square again with that code. POST exchange/ack deletes replay state only after WordPress confirms the matching generation is durable.
 
 - [ ] **Step 7: Implement and test the five route handlers**
 
@@ -720,7 +723,7 @@ The PR body must state that the durable Redis registry is security authority, re
 
 - [ ] **Step 1: Write failing signature, SSRF, and routing tests**
 
-Cover exact Square signature URL/raw-body verification, malformed reference IDs, merchant/environment mismatch, route-cache eviction, revoked/unknown connections, event deduplication, relay key overlap, site 2xx/4xx/429/5xx mapping, redirect rejection, proxy-env bypass, private IPv4/IPv6, and DNS rebinding.
+Cover exact Square signature URL/raw-body verification, malformed reference IDs, merchant/environment mismatch, route-cache eviction, revoked/unknown connections, event deduplication, relay key overlap, site 2xx/4xx/429/5xx mapping, redirect rejection, proxy-env bypass, private IPv4/IPv6, and DNS rebinding. Route tests must also prove that a verified `oauth.authorization.revoked` event calls `advanceRevokedBefore` with its environment, merchant ID, and event creation time before returning 200, while a failed watermark update returns 503.
 
 ~~~ts
 it('pins the validated address even if DNS changes before connect', async () => {
@@ -803,7 +806,7 @@ export function pinnedHttpsPost(input: {
 - Permanent destination 4xx except 429: acknowledge 202 after safe log.
 - DNS/network/timeout/429/5xx: 503.
 
-Only terminal.checkout.updated is relayed in the first release. oauth.authorization.revoked is handled locally by atomically advancing the merchant/environment revoked-before watermark from the verified event creation time; every connection authorized at or before that watermark fails closed.
+Only terminal.checkout.updated is relayed in the first release. `handleSquareWebhook` dispatches a verified `oauth.authorization.revoked` event to `advanceRevokedBefore` with its environment, merchant ID, and event creation time before acknowledging it. The store advances the merchant/environment revoked-before watermark atomically; every connection authorized at or before that watermark fails closed. If the store operation fails, return 503 so Square retries.
 
 ~~~ts
 export function relayOutcomeStatus(outcome: RelayOutcome): number {
