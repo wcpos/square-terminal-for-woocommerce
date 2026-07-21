@@ -55,4 +55,7 @@ if ( ! function_exists( 'wp_register_script' ) ) { function wp_register_script( 
 if ( ! function_exists( 'wp_enqueue_script' ) ) { function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $args = array() ) { $GLOBALS['sqtwc_enqueued_scripts'][] = $handle; return true; } }
 if ( ! function_exists( 'wp_localize_script' ) ) { function wp_localize_script( $handle, $object_name, $l10n ) { $GLOBALS['sqtwc_localized_scripts'][$handle] = array( 'object' => $object_name, 'data' => $l10n ); return true; } }
 if ( ! function_exists( 'wp_register_style' ) ) { function wp_register_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_registered_styles'][$handle] = $src; return true; } }
+// Stands in for the official WooCommerce Square plugin's global accessor.
+if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
+class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }
 if ( ! function_exists( 'wp_enqueue_style' ) ) { function wp_enqueue_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_enqueued_styles'][] = $handle; return true; } }

@@ -11,6 +11,7 @@ use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\WooCommerceSquareHints;
 
 /**
  * Square Terminal payment gateway.
@@ -343,6 +344,16 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * Explain where a pre-filled setting came from.
+	 *
+	 * Shown only on fields this plugin pre-fills from the official WooCommerce
+	 * Square plugin, so a merchant is never left wondering why a value appeared.
+	 */
+	private static function hint_description(): string {
+		return __( 'Pre-filled from your WooCommerce Square settings. Save to apply it. Square credentials are not shared between the two plugins — enter the access token above.', 'square-terminal-for-woocommerce' );
+	}
+
+	/**
 	 * Register this gateway with WooCommerce.
 	 *
 	 * @param array<class-string> $gateways Payment gateway class names.
@@ -358,18 +369,22 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Define WooCommerce gateway settings fields.
 	 */
 	public function init_form_fields(): void {
+		$hints = WooCommerceSquareHints::detect();
+
 		$this->form_fields = array(
 			'enabled'                  => array(
 				'title' => __( 'Enable', 'square-terminal-for-woocommerce' ),
 				'type'  => 'checkbox',
 			),
 			'environment'              => array(
-				'title'   => __( 'Environment', 'square-terminal-for-woocommerce' ),
-				'type'    => 'select',
-				'options' => array(
+				'title'       => __( 'Environment', 'square-terminal-for-woocommerce' ),
+				'type'        => 'select',
+				'options'     => array(
 					'sandbox'    => __( 'Sandbox', 'square-terminal-for-woocommerce' ),
 					'production' => __( 'Production', 'square-terminal-for-woocommerce' ),
 				),
+				'default'     => '' !== $hints['environment'] ? $hints['environment'] : 'sandbox',
+				'description' => '' !== $hints['environment'] ? self::hint_description() : '',
 			),
 			'sandbox_access_token'     => array(
 				'title' => __( 'Sandbox Access Token', 'square-terminal-for-woocommerce' ),
@@ -380,8 +395,10 @@ class Gateway extends \WC_Payment_Gateway {
 				'type'  => 'password',
 			),
 			'location_id'              => array(
-				'title' => __( 'Location ID', 'square-terminal-for-woocommerce' ),
-				'type'  => 'text',
+				'title'       => __( 'Location ID', 'square-terminal-for-woocommerce' ),
+				'type'        => 'text',
+				'default'     => $hints['location_id'],
+				'description' => '' !== $hints['location_id'] ? self::hint_description() : '',
 			),
 			'skip_receipt_screen'      => array(
 				'title'   => __( 'Skip receipt screen', 'square-terminal-for-woocommerce' ),
