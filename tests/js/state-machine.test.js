@@ -2,12 +2,64 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 const payment = require('../../assets/js/payment.js');
-const { setup, flush } = require('./helpers');
+const { FakeElement, setup, flush } = require('./helpers');
 
 function hidden(elm) {
 	return elm.hasAttribute('hidden');
 }
+
+test('admin actions send the current environment, token, and location', async () => {
+	const elements = {
+		'sqtwc-create-device-code': new FakeElement('button'),
+		'sqtwc-admin-status': new FakeElement('div'),
+		'woocommerce_sqtwc_environment': new FakeElement('select'),
+		'woocommerce_sqtwc_sandbox_access_token': new FakeElement('input'),
+		'woocommerce_sqtwc_production_access_token': new FakeElement('input'),
+		'woocommerce_sqtwc_location_id': new FakeElement('input')
+	};
+	elements.woocommerce_sqtwc_environment.value = 'production';
+	elements.woocommerce_sqtwc_sandbox_access_token.value = 'sandbox-token';
+	elements.woocommerce_sqtwc_production_access_token.value = 'current-token';
+	elements.woocommerce_sqtwc_location_id.value = 'NEW';
+	let request;
+	const context = {
+		window: {
+			sqtwcAdmin: {
+				ajaxUrl: '/wp-admin/admin-ajax.php',
+				nonce: 'nonce',
+				strings: {}
+			}
+		},
+		document: {
+			readyState: 'complete',
+			getElementById: function (id) { return elements[id] || null; }
+		},
+		fetch: function (url, options) {
+			request = { url: url, options: options };
+			return Promise.resolve({
+				ok: true,
+				json: function () { return Promise.resolve({ success: true, code: 'PAIR-ME' }); }
+			});
+		},
+		Promise: Promise,
+		String: String,
+		encodeURIComponent: encodeURIComponent
+	};
+	const script = fs.readFileSync(path.join(__dirname, '../../assets/js/admin.js'), 'utf8');
+	vm.runInNewContext(script, context);
+
+	elements['sqtwc-create-device-code'].listeners.click[0]();
+	await flush();
+	const body = new URLSearchParams(request.options.body);
+
+	assert.equal(body.get('environment'), 'production');
+	assert.equal(body.get('access_token'), 'current-token');
+	assert.equal(body.get('location_id'), 'NEW');
+});
 
 test('idle: start enabled, cancel hidden, check enabled, device unlocked', () => {
 	const ctx = setup(payment);

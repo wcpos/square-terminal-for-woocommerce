@@ -34,6 +34,8 @@ if ( ! function_exists( 'get_transient' ) ) { function get_transient( $key ) { r
 if ( ! function_exists( 'set_transient' ) ) { function set_transient( $key, $value, $expiration = 0 ) { $GLOBALS['sqtwc_transients'][$key] = array( 'value' => $value, 'expiration' => $expiration ); return true; } }
 if ( ! function_exists( 'delete_transient' ) ) { function delete_transient( $key ) { unset( $GLOBALS['sqtwc_transients'][$key] ); return true; } }
 if ( ! function_exists( 'is_user_logged_in' ) ) { function is_user_logged_in() { return $GLOBALS['sqtwc_is_user_logged_in'] ?? false; } }
+if ( ! function_exists( 'is_checkout' ) ) { function is_checkout() { return $GLOBALS['sqtwc_is_checkout'] ?? false; } }
+if ( ! function_exists( 'is_checkout_pay_page' ) ) { function is_checkout_pay_page() { return $GLOBALS['sqtwc_is_checkout_pay_page'] ?? false; } }
 if ( ! function_exists( 'current_user_can' ) ) { function current_user_can( $cap ) { return $GLOBALS['sqtwc_current_user_can'] ?? false; } }
 if ( ! function_exists( 'wp_verify_nonce' ) ) { function wp_verify_nonce( $nonce, $action = -1 ) { return ! empty( $GLOBALS['sqtwc_nonce_valid'] ); } }
 if ( ! function_exists( 'wp_send_json' ) ) { function wp_send_json( $response, $status_code = null ) { $GLOBALS['sqtwc_last_json_response'] = array( $response, $status_code ); } }

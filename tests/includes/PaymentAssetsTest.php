@@ -6,6 +6,7 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 
 final class FailingSquareClientFactory {
@@ -17,11 +18,44 @@ final class FailingSquareClientFactory {
 	}
 }
 
+final class EmptySquareClientFactory {
+	public function create(): object {
+		return new \stdClass();
+	}
+}
+
+final class EmptySquareDeviceAdapter {
+	public function __construct( object $client ) {
+		unset( $client );
+	}
+
+	public function list_paired_devices( string $location_id ): array {
+		unset( $location_id );
+
+		return array();
+	}
+}
+
 final class PaymentAssetsTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array();
-		$GLOBALS['sqtwc_transients'] = array();
+		$GLOBALS['sqtwc_transients']                              = array();
+		$GLOBALS['sqtwc_registered_scripts']                      = array();
+		$GLOBALS['sqtwc_enqueued_scripts']                        = array();
+		$GLOBALS['sqtwc_registered_styles']                       = array();
+		$GLOBALS['sqtwc_enqueued_styles']                         = array();
+		$GLOBALS['sqtwc_is_checkout']                             = false;
+		$GLOBALS['sqtwc_is_checkout_pay_page']                    = false;
 		Settings::reset_cache_for_tests();
+	}
+
+	public function test_storefront_checkout_does_not_enqueue_payment_assets(): void {
+		$GLOBALS['sqtwc_is_checkout'] = true;
+
+		( new Gateway() )->enqueue_payment_assets();
+
+		self::assertNotContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] );
+		self::assertNotContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_styles'] );
 	}
 
 	public function test_sandbox_devices_are_squares_magic_test_ids(): void {
@@ -77,6 +111,23 @@ final class PaymentAssetsTest extends TestCase {
 		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
 		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
 		self::assertSame( 1, FailingSquareClientFactory::$calls );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_empty_production_device_list_uses_short_cache_lifetime(): void {
+		class_alias( EmptySquareClientFactory::class, SquareClientFactory::class );
+		class_alias( EmptySquareDeviceAdapter::class, SquareDeviceAdapter::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+
+		self::assertSame( array(), Gateway::get_available_devices( 'production' ) );
+		self::assertSame( 30, $GLOBALS['sqtwc_transients'][ $key ]['expiration'] );
 	}
 
 	public function test_saving_gateway_settings_clears_cached_devices(): void {

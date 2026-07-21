@@ -56,6 +56,7 @@ final class Plugin {
 	 */
 	public function init(): void {
 		add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
+		add_action( 'admin_enqueue_scripts', array( Gateway::class, 'enqueue_admin_assets' ) );
 		add_action( 'wp_ajax_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_sqtwc_get_terminal_status', array( $this, 'ajax_get_terminal_status' ) );
@@ -125,7 +126,9 @@ final class Plugin {
 			return;
 		}
 
-		$location_id = Settings::get_location_id();
+		$environment = isset( $request['environment'] ) && 'production' === sanitize_text_field( $request['environment'] ) ? 'production' : ( isset( $request['environment'] ) ? 'sandbox' : Settings::get_environment() );
+		$access_token = isset( $request['access_token'] ) ? sanitize_text_field( $request['access_token'] ) : Settings::get_access_token();
+		$location_id = isset( $request['location_id'] ) ? sanitize_text_field( $request['location_id'] ) : Settings::get_location_id();
 		if ( '' === $location_id ) {
 			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
 			return;
@@ -138,7 +141,7 @@ final class Plugin {
 		}
 
 		try {
-			$result = $this->create_device_adapter()->create_device_code(
+			$result = $this->create_device_adapter( $access_token, $environment )->create_device_code(
 				array(
 					'location_id'     => $location_id,
 					'name'            => $name,
@@ -149,7 +152,7 @@ final class Plugin {
 				throw new \UnexpectedValueException( 'Square returned an empty device code.' );
 			}
 
-			Gateway::delete_device_cache( Settings::get_environment(), $location_id );
+			Gateway::delete_device_cache( $environment, $location_id );
 			$this->send_ajax_response(
 				array(
 					'status'  => 200,
@@ -173,14 +176,16 @@ final class Plugin {
 			return;
 		}
 
-		$location_id = Settings::get_location_id();
+		$environment = isset( $request['environment'] ) && 'production' === sanitize_text_field( $request['environment'] ) ? 'production' : ( isset( $request['environment'] ) ? 'sandbox' : Settings::get_environment() );
+		$access_token = isset( $request['access_token'] ) ? sanitize_text_field( $request['access_token'] ) : Settings::get_access_token();
+		$location_id = isset( $request['location_id'] ) ? sanitize_text_field( $request['location_id'] ) : Settings::get_location_id();
 		if ( '' === $location_id ) {
 			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
 			return;
 		}
 
 		try {
-			$this->create_device_adapter()->validate_location( $location_id );
+			$this->create_device_adapter( $access_token, $environment )->validate_location( $location_id );
 			$this->send_ajax_response(
 				array(
 					'status'  => 200,
@@ -277,9 +282,9 @@ final class Plugin {
 	 *
 	 * @return SquareDeviceAdapter|object
 	 */
-	private function create_device_adapter() {
+	private function create_device_adapter( ?string $access_token = null, ?string $environment = null ) {
 		if ( null === $this->device_adapter ) {
-			$this->device_adapter = new SquareDeviceAdapter( ( new SquareClientFactory() )->create() );
+			$this->device_adapter = new SquareDeviceAdapter( ( new SquareClientFactory() )->create( $access_token, $environment ) );
 		}
 
 		return $this->device_adapter;

@@ -1,9 +1,13 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Plugin;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 
 final class OrderStatusCancelHandler {
@@ -46,6 +50,28 @@ final class AdminDeviceAdapter {
 	}
 }
 
+final class CurrentSettingsSquareClientFactory {
+	public static array $arguments = array();
+
+	public function create( ?string $access_token = null, ?string $environment = null ): object {
+		self::$arguments = array( $access_token, $environment );
+
+		return new \stdClass();
+	}
+}
+
+final class CurrentSettingsSquareDeviceAdapter {
+	public static string $location_id = '';
+
+	public function __construct( object $client ) {
+		unset( $client );
+	}
+
+	public function validate_location( string $location_id ): void {
+		self::$location_id = $location_id;
+	}
+}
+
 final class PluginTest extends TestCase {
 	protected function setUp(): void {
 		unset( $GLOBALS['wpdb'] );
@@ -54,6 +80,7 @@ final class PluginTest extends TestCase {
 		$GLOBALS['sqtwc_transients']       = array();
 		$GLOBALS['sqtwc_current_user_can'] = true;
 		$GLOBALS['sqtwc_nonce_valid']      = true;
+		$_POST                             = array();
 		Settings::reset_cache_for_tests();
 	}
 
@@ -98,6 +125,7 @@ final class PluginTest extends TestCase {
 
 		self::assertArrayHasKey( 'wp_ajax_sqtwc_create_device_code', $GLOBALS['sqtwc_actions'] );
 		self::assertArrayHasKey( 'wp_ajax_sqtwc_validate_settings', $GLOBALS['sqtwc_actions'] );
+		self::assertContains( array( Gateway::class, 'enqueue_admin_assets' ), $GLOBALS['sqtwc_actions']['admin_enqueue_scripts'] ?? array() );
 		self::assertArrayNotHasKey( 'wp_ajax_nopriv_sqtwc_create_device_code', $GLOBALS['sqtwc_actions'] );
 		self::assertArrayNotHasKey( 'wp_ajax_nopriv_sqtwc_validate_settings', $GLOBALS['sqtwc_actions'] );
 	}
@@ -117,24 +145,55 @@ final class PluginTest extends TestCase {
 		self::assertSame( 0, $adapter->creates );
 	}
 
-	public function test_create_device_code_returns_pairing_code_and_clears_discovery_cache(): void {
+	public function test_create_device_code_uses_current_location_and_clears_its_discovery_cache(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
 			'environment'  => 'production',
-			'location_id' => 'LOC',
+			'location_id' => 'OLD',
 		);
 		Settings::reset_cache_for_tests();
-		$key                                = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$key                                = Gateway::get_device_cache_key( 'production', 'NEW' );
 		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array( array( 'id' => 'old' ) ), 'expiration' => 300 );
 		$adapter                            = new AdminDeviceAdapter();
-		$_POST                              = array( '_wpnonce' => 'valid', 'name' => 'Front Desk' );
+		$_POST                              = array(
+			'_wpnonce'    => 'valid',
+			'environment' => 'production',
+			'access_token' => 'current-token',
+			'location_id' => 'NEW',
+			'name'        => 'Front Desk',
+		);
 
 		( new Plugin( null, null, null, null, $adapter ) )->ajax_create_device_code();
 
 		self::assertSame( 200, $GLOBALS['sqtwc_last_json_response'][1] );
 		self::assertSame( 'PAIR-ME', $GLOBALS['sqtwc_last_json_response'][0]['code'] );
-		self::assertSame( 'LOC', $adapter->create_data['location_id'] );
+		self::assertSame( 'NEW', $adapter->create_data['location_id'] );
 		self::assertSame( 'Front Desk', $adapter->create_data['name'] );
 		self::assertArrayNotHasKey( $key, $GLOBALS['sqtwc_transients'] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_validate_settings_uses_current_credentials_environment_and_location(): void {
+		class_alias( CurrentSettingsSquareClientFactory::class, SquareClientFactory::class );
+		class_alias( CurrentSettingsSquareDeviceAdapter::class, SquareDeviceAdapter::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'sandbox',
+			'sandbox_access_token'    => 'saved-token',
+			'location_id'             => 'OLD',
+		);
+		Settings::reset_cache_for_tests();
+		$_POST = array(
+			'_wpnonce'    => 'valid',
+			'environment' => 'production',
+			'access_token' => 'current-token',
+			'location_id' => 'NEW',
+		);
+
+		( new Plugin() )->ajax_validate_settings();
+
+		self::assertSame( array( 'current-token', 'production' ), CurrentSettingsSquareClientFactory::$arguments );
+		self::assertSame( 'NEW', CurrentSettingsSquareDeviceAdapter::$location_id );
+		self::assertSame( 200, $GLOBALS['sqtwc_last_json_response'][1] );
 	}
 
 	public function test_validate_settings_calls_square_once_and_maps_errors(): void {

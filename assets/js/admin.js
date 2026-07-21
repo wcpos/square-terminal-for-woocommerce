@@ -30,9 +30,16 @@
 	}
 
 	function post(action) {
+		var environmentField = document.getElementById('woocommerce_sqtwc_environment');
+		var environment = environmentField ? environmentField.value : '';
+		var tokenField = document.getElementById('woocommerce_sqtwc_' + environment + '_access_token');
+		var locationField = document.getElementById('woocommerce_sqtwc_location_id');
 		var body = [
 			encodeParam('action', action),
-			encodeParam('_wpnonce', config.nonce)
+			encodeParam('_wpnonce', config.nonce),
+			encodeParam('environment', environment),
+			encodeParam('access_token', tokenField ? tokenField.value : ''),
+			encodeParam('location_id', locationField ? locationField.value : '')
 		].join('&');
 
 		return fetch(config.ajaxUrl, {

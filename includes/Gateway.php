@@ -19,6 +19,9 @@ class Gateway extends \WC_Payment_Gateway {
 	/** Device discovery transient lifetime in seconds. */
 	private const DEVICE_CACHE_TTL = 300;
 
+	/** Empty device discovery transient lifetime in seconds. */
+	private const EMPTY_DEVICE_CACHE_TTL = 30;
+
 	/**
 	 * Gateway constructor.
 	 */
@@ -33,7 +36,6 @@ class Gateway extends \WC_Payment_Gateway {
 
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_assets' ) );
-		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 	}
 
 	/**
@@ -42,7 +44,7 @@ class Gateway extends \WC_Payment_Gateway {
 	 * The script is dependency-free and receives the AJAX contract, the admin
 	 * nonce, and every dynamic string through wp_localize_script.
 	 */
-	public function enqueue_admin_assets(): void {
+	public static function enqueue_admin_assets(): void {
 		if ( ! self::is_gateway_settings_screen() ) {
 			return;
 		}
@@ -117,8 +119,8 @@ class Gateway extends \WC_Payment_Gateway {
 	/**
 	 * Register and enqueue the cashier payment assets with localized data.
 	 *
-	 * Enqueued on the order-pay page and checkout, and anywhere a POS context
-	 * opts in via the `sqtwc_enqueue_payment_assets` filter. The localized data
+	 * Enqueued on the order-pay page and anywhere a POS context opts in via the
+	 * `sqtwc_enqueue_payment_assets` filter. The localized data
 	 * carries every dynamic string, the AJAX contract, and the device list so
 	 * the JavaScript stays dependency-free and fully translatable.
 	 */
@@ -151,8 +153,7 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Decide whether the current request should load the cashier assets.
 	 */
 	private function should_enqueue_payment_assets(): bool {
-		$should = ( function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() )
-			|| ( function_exists( 'is_checkout' ) && is_checkout() );
+		$should = function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page();
 
 		/**
 		 * Filter whether the Square Terminal cashier assets should load.
@@ -246,11 +247,11 @@ class Gateway extends \WC_Payment_Gateway {
 			} else {
 				$stale_devices = get_transient( $stale_cache_key );
 				$devices       = false === $stale_devices ? array() : (array) $stale_devices;
-				set_transient( $cache_key, $devices, self::DEVICE_CACHE_TTL );
+				set_transient( $cache_key, $devices, empty( $devices ) ? self::EMPTY_DEVICE_CACHE_TTL : self::DEVICE_CACHE_TTL );
 
 				try {
 					$devices = ( new SquareDeviceAdapter( ( new SquareClientFactory() )->create() ) )->list_paired_devices( $location_id );
-					set_transient( $cache_key, $devices, self::DEVICE_CACHE_TTL );
+					set_transient( $cache_key, $devices, empty( $devices ) ? self::EMPTY_DEVICE_CACHE_TTL : self::DEVICE_CACHE_TTL );
 					set_transient( $stale_cache_key, $devices );
 				} catch ( Throwable $exception ) {
 					$mapped = ( new SquareErrorMapper() )->map( $exception );
