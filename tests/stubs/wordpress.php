@@ -26,7 +26,7 @@ if ( ! function_exists( 'apply_filters' ) ) { function apply_filters( $hook, $va
 if ( ! function_exists( 'register_rest_route' ) ) { function register_rest_route( $namespace, $route, $args = array() ) { $GLOBALS['sqtwc_rest_routes'][$namespace . $route] = $args; return true; } }
 if ( ! function_exists( 'register_activation_hook' ) ) { function register_activation_hook( $file, $callback ) { $GLOBALS['sqtwc_activation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'register_deactivation_hook' ) ) { function register_deactivation_hook( $file, $callback ) { $GLOBALS['sqtwc_deactivation_hook'] = array( $file, $callback ); } }
-if ( ! function_exists( 'get_option' ) ) { function get_option( $key, $default = false ) { $GLOBALS['sqtwc_get_option_count'][$key] = ($GLOBALS['sqtwc_get_option_count'][$key] ?? 0) + 1; return $GLOBALS['sqtwc_options'][$key] ?? $default; } }
+if ( ! function_exists( 'get_option' ) ) { function get_option( $key, $default = false ) { if ( ! empty( $GLOBALS['sqtwc_get_option_throws'] ) ) { throw new \RuntimeException( 'option filter exploded' ); } $GLOBALS['sqtwc_get_option_count'][$key] = ($GLOBALS['sqtwc_get_option_count'][$key] ?? 0) + 1; return $GLOBALS['sqtwc_options'][$key] ?? $default; } }
 if ( ! function_exists( 'add_option' ) ) { function add_option( $key, $value, $deprecated = '', $autoload = 'yes' ) { if ( array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
 if ( ! function_exists( 'delete_option' ) ) { function delete_option( $key ) { if ( ! array_key_exists( $key, $GLOBALS['sqtwc_options'] ) ) { return false; } unset( $GLOBALS['sqtwc_options'][$key] ); return true; } }
 if ( ! function_exists( 'update_option' ) ) { function update_option( $key, $value ) { $GLOBALS['sqtwc_options'][$key] = $value; return true; } }
@@ -55,4 +55,7 @@ if ( ! function_exists( 'wp_register_script' ) ) { function wp_register_script( 
 if ( ! function_exists( 'wp_enqueue_script' ) ) { function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $args = array() ) { $GLOBALS['sqtwc_enqueued_scripts'][] = $handle; return true; } }
 if ( ! function_exists( 'wp_localize_script' ) ) { function wp_localize_script( $handle, $object_name, $l10n ) { $GLOBALS['sqtwc_localized_scripts'][$handle] = array( 'object' => $object_name, 'data' => $l10n ); return true; } }
 if ( ! function_exists( 'wp_register_style' ) ) { function wp_register_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_registered_styles'][$handle] = $src; return true; } }
+// Stands in for the official WooCommerce Square plugin's global accessor.
+if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
+class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }
 if ( ! function_exists( 'wp_enqueue_style' ) ) { function wp_enqueue_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_enqueued_styles'][] = $handle; return true; } }
