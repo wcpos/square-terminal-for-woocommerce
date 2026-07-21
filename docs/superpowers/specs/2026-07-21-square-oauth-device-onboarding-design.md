@@ -32,8 +32,10 @@ Terminals, guides pairing when necessary, and keeps authorization current.
 3. Existing manually configured installations remain supported and remain in
    manual mode after upgrade. Migration to WCPOS OAuth is optional.
 4. The WordPress site calls Square APIs directly with its encrypted access
-   token. wcpos.com handles the code-flow secret, OAuth callback, token refresh,
-   token revocation, and webhook relay.
+   token. wcpos.com handles Square PKCE OAuth, token refresh, token revocation,
+   and webhook relay. PKCE uses rotating single-use refresh tokens and requests
+   24-hour access tokens so an interrupted refresh cannot mint repeatedly and
+   any undistributed crash-window token expires quickly.
 5. Polling and the existing reconciliation sweeper remain correctness paths.
    Webhooks reduce latency but are never the only way a paid order becomes paid.
 6. Sandbox and production are separate connections with separate credentials,
@@ -106,19 +108,21 @@ sequenceDiagram
     P-->>A: Redirect to Square
     A->>S: Approve minimal permissions
     S->>B: Authorization code + broker state
-    B->>S: Exchange code using WCPOS app secret
     B-->>A: Redirect to WordPress with one-time ticket only
-    P->>B: Exchange ticket + verifier
-    B-->>P: Token package + merchant + locations + relay credentials
+    P->>B: Exchange ticket + PKCE verifier
+    B->>S: Exchange code using PKCE verifier
+    B-->>P: Short-lived access token + merchant + locations + relay credentials
     P->>S: List devices and create Terminal checkouts directly
     S->>B: Signed application webhook
     B->>P: Re-signed checkout webhook
 ```
 
-The Square application secret and Square webhook signature keys exist only on
-wcpos.com. OAuth access and refresh tokens are never placed in a browser URL.
-The plugin stores them encrypted and sends the refresh token to wcpos.com only
-over a server-to-server refresh request.
+The Square application secret (needed for per-token revocation), Square webhook
+signature keys, and rotating PKCE refresh tokens exist only on wcpos.com. OAuth
+access tokens are never placed in a browser URL; the plugin receives each
+short-lived access token over a server-to-server response and stores it
+encrypted. The broker stores each refresh token in its encrypted durable token
+vault and never returns one to WordPress.
 
 ## 6. wcpos.com broker
 
@@ -133,9 +137,11 @@ mode remains usable.
 |---|---|
 | `GET /capabilities` | Return protocol version and production/sandbox availability without secrets |
 | `POST /sessions` | Validate the WordPress callback, store a short-lived OAuth handshake, return the Square authorization URL |
-| `GET /callback` | Verify broker state, exchange Square's authorization code, create a one-time ticket, redirect to WordPress |
-| `POST /exchange` | Atomically consume the ticket after verifier proof and return the token package |
+| `GET /callback` | Verify broker state, seal Square's authorization code behind a one-time ticket, and redirect to WordPress |
+| `POST /exchange` | Verify the PKCE verifier, exchange the sealed code, and replay the token package until acknowledged |
+| `POST /exchange/ack` | Delete a replayable pending exchange only after WordPress confirms durable encrypted storage |
 | `POST /refresh` | Validate the WCPOS connection credential, idempotently refresh the Square token, return rotated credentials |
+| `POST /refresh/ack` | Delete a replayable refresh result only after WordPress confirms its encrypted record is durable |
 | `POST /disconnect` | Idempotently transition one WCPOS connection through token cleanup to revoked and remove relay registration |
 | `POST /heartbeat` | Refresh the webhook routing registration and report broker health |
 | `POST /webhooks/{environment}` | Verify the Square application webhook, route and re-sign supported events |
@@ -166,19 +172,36 @@ connection credential is logged.
    IP literals, non-public destinations, redirects, and non-standard production
    ports, then stores the handshake encrypted in Redis with a ten-minute TTL.
    Localhost is allowed only for the broker's non-production environment.
-4. The broker sends Square a random, single-use broker state and the fixed
-   WCPOS Square redirect URI. Production authorization sets `session=false` so
-   an existing Square browser session cannot silently select an account.
-5. `/callback` atomically consumes broker state before exchanging Square's
-   authorization code. It verifies that Square granted every required scope,
-   retrieves merchant and active-location data, encrypts the resulting package,
-   and stores it behind a random five-minute ticket.
+4. The broker sends Square a random, single-use broker state, the plugin's PKCE
+   challenge, and the fixed WCPOS Square redirect URI.
+   Production authorization sets `session=false` so an existing Square browser
+   session cannot silently select an account.
+5. `/callback` atomically consumes broker state, seals Square's authorization
+   code with the stored challenge/callback data, and stores it behind a random
+   five-minute ticket. It does not exchange the code before WordPress proves
+   possession of the PKCE verifier.
 6. The browser is redirected to the original WordPress callback with only the
    one-time ticket and `client_state`.
-7. WordPress verifies the stored state, then `/exchange` atomically consumes the
-   ticket only after the original verifier is supplied. Reuse returns a generic
-   expired-ticket response.
-8. The exchanged connection remains pending locally. WordPress displays the
+7. WordPress verifies the stored state, then `/exchange` proves the original
+   verifier, exchanges the sealed authorization code using Square PKCE with
+   `short_lived=true`, verifies the exact scopes, and retrieves merchant and
+   active-location data. Before responding, the broker stores an encrypted
+   `pending_exchange` result keyed by ticket, verifier proof, and client
+   idempotency key.
+8. Before publishing an exchange result, the broker durably stores the rotating
+   refresh token in its encrypted per-connection vault. The replayable response
+   contains the short-lived access token but no refresh token. A lost exchange
+   response replays byte-for-byte under that same proof and key.
+   WordPress calls `/exchange/ack` only after its encrypted local record is
+   durable. It retains the exchange operation identity and retries acknowledgement
+   during connection maintenance until the broker confirms it; merchant
+   activation is unavailable while acknowledgement is pending. Abandoned pending
+   exchanges are tombstoned and their known access
+   token revoked by broker maintenance. A crash after Square returns but before
+   persistence is indeterminate: the ticket cannot exchange again, the site
+   must reconnect, and the undistributed 24-hour access token is recorded as an
+   explicit bounded limitation.
+9. The exchanged connection remains pending locally. WordPress displays the
    Square merchant identity and selected or eligible location, and the
    administrator must choose **Use this Square account** before it becomes the
    active connection. Rejection disconnects the pending connection.
@@ -193,7 +216,7 @@ The exchange response contains a WCPOS-signed connection credential binding:
 - a random connection ID;
 - Square merchant ID;
 - environment;
-- normalized WordPress site origin; and
+- normalized WordPress site origin;
 - a monotonic connection generation; and
 - issue time and key ID.
 
@@ -202,8 +225,9 @@ heartbeat endpoints. The credential is audience-restricted to this broker and
 has a bounded lifetime renewed during token refresh. Signing supports an active
 and previous key so broker-key rotation does not disconnect every merchant.
 
-The plugin refreshes at least once every seven days and before the Square access
-token expires, and retries once on an authentication-expired API response. One
+The plugin schedules maintenance twice daily, refreshes a 24-hour Square access
+token when six hours or less remain, refreshes on demand before an operation
+when necessary, and retries once on an authentication-expired API response. One
 per-environment WordPress mutation lock serializes refresh, OAuth activation,
 reconnect, method switch, location/credential mutation, and disconnect. Every
 request and response carries the connection ID and generation. WordPress saves
@@ -212,50 +236,100 @@ the operation, so a delayed refresh cannot overwrite a disconnect or newer
 connection.
 
 Each refresh carries a client-generated idempotency key retained until the new
-encrypted record is durably saved. Under a per-connection broker lock, the
-broker obtains the new token, persists an encrypted replay result and cleanup
-state by connection/idempotency key, then revokes the superseded access token
-with `revoke_only_access_token=true`. It returns the new access token only after
-that revoke succeeds. A lost response returns the same persisted result instead
-of refreshing twice. WordPress acknowledges the operation only after its new
-encrypted record is durably saved; until then, retries return the same result.
-The replay record is deleted on acknowledgement and otherwise expires no sooner
-than the returned access token. An expired or missing replay record fails closed
-and requires reconnect rather than issuing an untracked token.
+encrypted WordPress record is durably saved. WordPress sends its current access
+token for superseded-token cleanup, but never possesses or sends a refresh
+token. Under a monotonic fence, the broker reads the current single-use refresh
+token from its encrypted durable vault and first persists a `refreshing`
+operation containing the vault generation, operation ID, access token, and
+fencing token. It then calls Square PKCE ObtainToken with `short_lived=true`.
+Every post-Square commit verifies connection status, connection and vault
+generation, operation ID, and fence. If the broker loses the lease or fence but
+still received a token, it revokes that returned access token, never writes the
+rotated refresh token to the vault, and never publishes the result.
 
-The response contains the latest access token, expiry, refresh token when Square
-rotates it, renewed WCPOS connection credential, and current relay verification
-key set. This two-phase protocol maintains the invariant that, outside a locked
-refresh/disconnect operation, the broker knows of exactly one live access token
-for the connection.
+After a successful fenced commit, one atomic Redis transition replaces the
+encrypted vault entry with the rotated refresh token and persists an encrypted
+replay result and cleanup state. The broker then revokes the superseded access token with
+`revoke_only_access_token=true`. It returns the new token only after that revoke
+succeeds. A lost response replays the same result; WordPress acknowledges only
+after its encrypted record is durable. The replay record is deleted on
+acknowledgement and otherwise expires no sooner than the returned access token.
+
+If the process dies or the provider outcome is otherwise indeterminate after
+the remote refresh begins, the broker never reuses that single-use refresh
+token. It marks the connection `reconnect_required`, revokes every known access
+token, and fails closed. A provider-issued but undistributed access token can
+exist only in the exact response-before-persistence crash window and expires
+within 24 hours. The system promises one distributed live token, not an
+impossible cross-system exactly-once guarantee.
+
+The response contains the latest 24-hour access token and its expiry, renewed
+WCPOS connection credential, and current relay verification key set. It never
+contains a refresh token or refresh-token expiry.
 
 ### 6.4 Durable connection authorization registry
 
-The broker keeps an authoritative, no-TTL connection registry in Upstash Redis:
+The broker keeps an authoritative, no-TTL connection registry and a separate
+encrypted, no-TTL refresh-token vault in Upstash Redis:
 
 ```text
 connection_id -> generation, merchant_id, environment, normalized site origin,
-                 active|disconnecting|revoked, operation_id,
+                 active|refreshing|disconnecting|reconnect_required|revoked,
+                 operation_id, fence, provider_authorized_at,
                  created_at, revoked_at, last_seen
+
+connection_id -> encrypted current PKCE refresh token,
+                 refresh_token_expires_at, vault_generation
 ```
 
-The durable registry stores no Square token; encrypted tokens exist only in the
-bounded refresh/disconnect operation ledger described above. `/exchange`
-atomically creates generation one. Refresh and heartbeat require an existing
-`active` record whose origin,
-merchant, environment, and generation match the signed credential. The first
-disconnect atomically changes `active` to `disconnecting` and records its stable
-operation/idempotency key. Only retries presenting that exact key can continue
-the operation; all other refresh, heartbeat, and disconnect requests fail
-closed. After token cleanup succeeds, the broker finalizes `revoked` and stores
-an idempotent success result. A missing record, Redis outage, revoked status on
-any other operation, or stale generation fails closed. Registry backups and
-availability alerts are release requirements; data loss disconnects managed
-sites rather than allowing an old refresh token to regain access.
+The non-secret registry stores no Square token. Refresh tokens exist only in the
+encrypted durable vault, while access tokens needed for bounded cleanup exist
+in encrypted exchange/refresh/disconnect operation records. `/exchange`
+atomically creates generation one and its vault entry before making the access
+token available to WordPress. Every lock acquisition increments the record's
+fencing token. Refresh and heartbeat require an existing `active` record whose
+origin, merchant, environment, generation, authorization watermark, and fence
+match the signed credential. The first disconnect atomically changes `active`
+to `disconnecting`, records its stable operation/idempotency key, and deletes
+the encrypted vault entry in the same Lua transition. Only retries presenting
+that exact key can continue the operation; all other refresh, heartbeat, and
+disconnect requests fail closed. After access-token cleanup succeeds, the
+broker finalizes `revoked` and stores an idempotent success result. A missing
+record or vault entry, Redis outage, revoked status on any other operation, or
+stale generation fails closed. Registry metadata backups, vault-key backup
+access controls, encryption-key recovery, and availability alerts are release
+requirements. A Redis snapshot is never restored into service as active
+authorization state: while Connect/refresh capabilities are disabled, recovery
+restores registry metadata for audit, marks every restored non-revoked
+connection `reconnect_required`, deletes every restored vault and token-bearing
+operation entry, and only then re-enables capabilities. No restored refresh
+token is ever passed to Square. Data loss therefore disconnects managed sites
+rather than allowing stale credentials to regain access. Old encrypted backups
+remain sensitive until retention expiry; deleting a live Redis entry is not
+described as cryptographic erasure.
+
+The broker also stores a no-TTL merchant/environment revocation watermark based
+on the signed Square event creation time. On initial exchange, it requires
+Square's token response to report `short_lived=true`, parses `expires_at`, and
+derives `provider_authorized_at = expires_at - 86,400 seconds`. Both values are
+therefore in Square's clock domain. That original authorization time is
+immutable for the connection lifetime; refresh changes token and vault
+generations and expiries but never advances it. Exchange, refresh, heartbeat,
+and disconnect require `provider_authorized_at` to be strictly greater than the
+watermark. Processing `oauth.authorization.revoked` atomically advances the
+watermark. Malformed/missing short-lived metadata, an equality at the boundary,
+or any indeterminate comparison fails closed. A delayed older event cannot
+revoke a later reauthorization, while an exchange racing the event cannot
+escape it; a failed post-token watermark/fence check deletes any newly stored
+refresh capability, revokes the newly returned access token, and does not
+activate the connection. Broker wall-clock time is never used for this
+comparison.
 
 An ordinary site disconnect sends the locally held current access token only in
-that authenticated server-to-server request. The broker stores it encrypted in
-the bounded disconnect operation record, enters `disconnecting`, and calls
+that authenticated server-to-server request. In one fenced Lua transition, the
+broker stores it encrypted in the bounded disconnect operation record, enters
+`disconnecting`, and deletes that connection's live refresh-token vault entry
+before calling
 Square `RevokeToken` with `revoke_only_access_token=true`. The same operation key
 can safely retry after a timeout or process restart. The operation also waits
 for every refresh that entered the per-connection lock earlier: if one returns a
@@ -264,12 +338,14 @@ that new token and records cleanup before the disconnect can finalize. Once all
 known tokens are revoked, it erases operation secrets and marks `revoked`.
 
 The broker never uses Square's default seller-wide revocation for this action
-because one merchant can connect several WordPress sites. The durable revoked
-record permanently blocks that connection's still-valid code-flow refresh token
-at the broker. A Square `oauth.authorization.revoked` event marks every
-connection for that merchant and environment revoked. Seller-wide revocation
-remains an explicit Square Dashboard action, not the meaning of the plugin's
-per-site Disconnect button.
+because one merchant can connect several WordPress sites. WordPress has never
+received the PKCE refresh token, and deletion of the broker vault entry removes
+the only refresh capability for that connection; the durable revoked record is
+an additional fail-closed guard. A Square `oauth.authorization.revoked` event advances the signed
+merchant/environment watermark, making every older connection effectively
+revoked without a non-atomic key scan. Seller-wide revocation remains an
+explicit Square Dashboard action, not the meaning of the plugin's per-site
+Disconnect button.
 
 Refresh and disconnect serialize on the registry record and operation ledger.
 If refresh finishes at Square after disconnect begins, the broker revokes its
@@ -371,22 +447,58 @@ Each environment has an explicit active method:
 manual | oauth | unconfigured
 ```
 
-Immutable manual and OAuth connection records live in a dedicated non-autoloaded
-option rather than being selected directly from the WooCommerce gateway
-settings array. OAuth records contain encrypted access token, encrypted refresh
-token, expiry, encrypted WCPOS connection credential, encrypted relay keys,
+Immutable manual and OAuth connection records live in separate non-autoloaded
+per-record options rather than one aggregate option or the WooCommerce gateway
+settings array. Per-environment active pointers are separate non-autoloaded
+options. OAuth records contain an encrypted access token, expiry, encrypted
+WCPOS connection credential, encrypted relay keys,
 merchant ID/name, selected location ID/name/currency, granted scopes, connection
-routing ID, broker generation, local generation, status, and last
+routing ID, broker generation, local generation, local fencing token, status, and last
 validation/heartbeat times. Manual records contain the encrypted token,
 environment, location/webhook identity, a non-secret credential fingerprint,
 local generation, and status.
+
+Record creation uses atomic `add_option`. Mutation uses a `$wpdb` conditional
+update against the exact previously read serialized value plus expected
+generation/fence, followed by object-cache invalidation. Active-pointer changes
+use the same conditional primitive. A read/check/`update_option` sequence is not
+accepted as compare-and-swap. If a lease expires, a stale writer cannot commit.
+Tests use two independent writers that read generation N and prove exactly one
+writes N+1.
+
+Because record and pointer rows cannot be made crash-atomic by independent CAS
+writes, every activation, replacement, disconnect, and manual switch uses a
+durable per-environment transition intent in another non-autoloaded option:
+
+```text
+sqtwc_connection_transition_v1_<environment> -> operation_id, fence,
+    activation|replacement|disconnect|manual_switch, phase,
+    source_id, target_id, exact expected record/pointer values,
+    exact target record/pointer values
+```
+
+The mutation lock creates this intent with atomic `add_option` before changing
+any connection or pointer. Each exact-value CAS write advances the intent phase
+with another exact-value CAS. The intent is deleted only after every record and
+pointer write, and any required broker operation, is durable. New checkout,
+device, and administrator mutations fail closed while an intent is open.
+Scheduled and administrator-triggered maintenance resumes the same operation ID
+idempotently by comparing both expected and already-applied target values. Exact
+identity reconciliation may continue only for a historical record the intent
+does not mutate. A missing/corrupt intent field or state that matches neither
+the expected nor target value fails closed for administrator recovery rather
+than guessing. Tests inject a crash after intent creation and after every
+constituent write for activation, replacement, disconnect, and manual switch,
+then prove recovery produces a matching active pointer and record state without
+orphaning broker revocation work.
 
 Records are keyed by full connection ID, with a separate per-environment active
 pointer. A superseded connection becomes `retired`, not deleted, while any open
 or abandoned attempt references it. The connection service can resolve a client
 by the attempt's immutable connection ID and generation, not just by the active
-pointer. Retired records keep refresh capability and can reconcile or cancel
-only their recorded attempts; they cannot create new checkouts. They are revoked
+pointer. Retired records retain access to their broker-managed refresh vault
+only while they must reconcile or cancel recorded attempts; WordPress still
+never possesses the refresh token. They cannot create new checkouts. They are revoked
 and deleted only after the attempt index proves no open or abandoned checkout
 depends on them. The admin displays this state rather than claiming
 disconnection is complete.
@@ -449,6 +561,17 @@ Upgrade is non-destructive:
    token; replacement requires an explicit new non-placeholder value.
 6. Existing manual checkout, polling, direct webhook, and sweeper behavior
    continues unchanged.
+
+Pre-upgrade open or abandoned attempts are not assigned the imported current
+manual identity merely because it was active at upgrade time. On first
+reconciliation, a legacy binder may use that one imported candidate only to
+call `GetTerminalCheckout`; it binds the attempt after the returned checkout
+proves the exact `woocommerce_order_<id>` reference, expected location and
+environment, and the token's validated merchant identity. A not-found,
+unauthorized, mismatched, or indeterminate result remains unresolved and is
+flagged for manual review without trying other credentials. This prevents a
+settings change made before upgrade from rebinding an old payment to a new
+Square account.
 
 On the first successful activation of managed OAuth, the plugin confirms the
 manual import, then blanks the legacy token, location, and webhook secret fields
@@ -639,19 +762,22 @@ hardware.
 
 ## 15. Disconnect and rollback
 
-OAuth disconnect runs under the environment mutation lock. After the
-open-attempt guard passes, the broker atomically enters `disconnecting` under a
-stable operation key and begins revoking every known token. WordPress
-immediately removes the active pointer and marks the local record
-`revocation_pending`; the connection service can no longer use it for Square
-operations. It retains the encrypted access token only so the same idempotent
-disconnect operation can finish the Square revoke, then erases the record,
-device cache, and relay keys. A lost success response is safe to retry.
+OAuth disconnect runs under the environment mutation lock and durable
+transition intent. After the open-attempt guard passes, WordPress persists the
+stable broker operation ID, advances the local record to
+`revocation_pending`, and removes the active pointer as recoverable intent
+phases. The connection service permits no new Square operation while the intent
+is open. The broker atomically enters `disconnecting`, deletes its refresh-token
+vault entry, and begins revoking every known access token. WordPress retains the
+encrypted access token only so the same idempotent disconnect operation can
+finish the Square revoke, then erases the record, device cache, relay keys, and
+finally the transition intent. A crash or lost response resumes the same phases
+and operation ID.
 
 If Square revocation remains unavailable, **Forget local retry data** requires
 confirmation and explains that the current access token can remain valid until
-expiry, although the broker `disconnecting` or `revoked` record permanently
-blocks refresh. The merchant
+expiry, although the broker has deleted the only refresh-token capability and
+its `disconnecting` or `revoked` record also blocks refresh. The merchant
 can revoke the entire WCPOS application in Square Dashboard, which also
 disconnects every other site using that merchant authorization. A merchant-wide
 `oauth.authorization.revoked` event makes all matching local connections fail
@@ -695,9 +821,10 @@ live. The plugin treats broker unavailability as follows:
   and reject a response from a different recorded connection, even when the
   attempt's connection has since become retired.
 - Changing credentials does not make an old checkout belong to the new account.
-- One per-environment mutation lock and generation compare-and-swap protects
-  refresh, activation, reconnect, method switch, settings mutation, and
-  disconnect from stale responses.
+- One per-environment mutation lock, durable transition intent, and generation
+  compare-and-swap protect refresh, activation, reconnect, method switch,
+  settings mutation, and disconnect from stale responses and mid-transition
+  process death.
 - OAuth callback, token exchange, refresh, and settings mutations require
   `manage_woocommerce`; payment and device enumeration use existing order
   access and nonce rules.
@@ -714,15 +841,33 @@ live. The plugin treats broker unavailability as follows:
 - session callback validation, state expiry, state replay, and verifier failure;
 - no caller-supplied scope escalation;
 - callback never places Square secrets in redirect URLs;
-- one-time ticket atomic consumption and replay rejection;
+- PKCE challenge/verifier binding and `short_lived=true` on exchange and
+  refresh token requests;
+- exchange and refresh responses never expose a refresh token to WordPress, and
+  plugin records and logs never contain one;
+- broker-vault refresh succeeds, atomically rotates the vault token, and cannot
+  be invoked after disconnect deletes that connection's vault entry;
+- restoring a snapshot captured before disconnect marks all restored live
+  connections `reconnect_required`, purges restored vault/operation secrets,
+  rejects refresh, and never calls Square ObtainToken;
+- pending exchange byte-for-byte replay until durable acknowledgement;
+- abandoned exchange cleanup and crash injection after Square code exchange but
+  before replay persistence;
 - production authorization always sets `session=false`;
 - durable connection creation, generation checks, `disconnecting`/`revoked`
   transitions, missing-record fail-closed behavior, and merchant-wide
   authorization-revoked handling;
+- merchant revocation-watermark races with exchange, delayed older events,
+  broker clocks ahead/behind Square, exact-time ties, malformed short-lived
+  metadata, and refresh never advancing `provider_authorized_at`;
 - two sites connected to one merchant remain independent: disconnecting one
   leaves the other operational and the disconnected credential can never
   refresh again;
 - refresh rotation and concurrent/replayed refresh behavior;
+- crash injection immediately after ObtainToken proves the single-use refresh
+  token is never called a second time and the connection requires reconnect;
+- lock lease expiry proves fence, generation, status, and operation ID reject a
+  stale post-Square commit;
 - refresh revokes the superseded access token before returning the new one;
 - disconnect retries use only the matching operation key and revoke both the
   current token and a token returned by an earlier in-flight refresh;
@@ -744,6 +889,18 @@ live. The plugin treats broker unavailability as follows:
 - rate limiting with Redis unavailable failing closed for OAuth mutations while
   webhook delivery reports a retryable failure.
 
+### WordPress unit and integration tests
+
+- transition-intent crash injection after intent creation and every record,
+  pointer, broker-operation, and phase write for activation, replacement,
+  disconnect, and manual switch;
+- maintenance idempotently completes each interrupted transition and rejects
+  corrupt or ambiguous state;
+- new checkout/device/admin mutations fail closed while a transition is open,
+  while an unaffected historical exact-identity attempt may reconcile; and
+- no WordPress option, transient, broker request, rendered payload, or log ever
+  contains a Square refresh token.
+
 ### Plugin PHPUnit
 
 - existing manual settings migrate without credential loss;
@@ -751,6 +908,8 @@ live. The plugin treats broker unavailability as follows:
 - blank password submission preserves a saved manual token;
 - authenticated encryption round-trip, tamper rejection, and salt-change
   failure;
+- per-record SQL compare-and-swap permits exactly one of two generation-N
+  writers to commit and invalidates the option cache;
 - provider selection never silently falls back;
 - OAuth callback state, exchange, refresh lock, disconnect, and broker errors;
 - pending merchant confirmation, `session=false` handoff, and explicit
@@ -771,6 +930,9 @@ live. The plugin treats broker unavailability as follows:
   new checkouts;
 - pending, detached, and completed-but-unreconciled attempts keep their original
   provider generation across replacement or disconnect;
+- a pre-upgrade legacy attempt binds only after provider ownership/reference,
+  location, environment, and merchant validation; changed settings remain
+  unresolved for manual review;
 - upgrade to OAuth followed by a code-only downgrade fails closed, while an
   explicit validated manual switch restores the safe downgrade path;
 - legacy and OAuth checkout reference formats reconcile correctly.
@@ -806,7 +968,9 @@ Pairing itself is verified against a controlled production Square merchant and
 physical Terminal because sandbox uses magic device IDs. It must prove code
 creation, expiry, pairing, discovery after reload, and one explicitly approved
 low-value payment. Final smoke occurs on `demo.wcpos.com` only after sandbox and
-controlled-hardware evidence is recorded.
+controlled-hardware evidence is recorded. A missing or `UNVERIFIED` physical
+Terminal result is a hard release stop: version bump, distributable artifact,
+tag, and publication do not proceed while production pairing is in scope.
 
 ## 18. Delivery sequence
 
@@ -866,10 +1030,18 @@ customer data, or full merchant/location names.
 - Managed OAuth requires wcpos.com for connect, token refresh, disconnect, and
   webhook relay. Direct Square calls continue while a cached access token is
   valid.
+- Managed OAuth uses Square PKCE single-use refresh tokens and 24-hour access
+  tokens. Refresh tokens remain exclusively in the broker's encrypted durable
+  vault. If the broker dies in the exact provider-response-before-persistence
+  window, an undistributed access token can exist until its 24-hour expiry; the
+  connection fails closed and requires reconnection rather than retrying the
+  consumed refresh token.
 - The no-TTL broker authorization registry is security-critical state. A Redis
   outage blocks managed mutations; registry data loss deliberately disconnects
   affected sites and requires reconnection rather than risking credential
-  resurrection.
+  resurrection. Snapshot recovery discards all restored vault/token-operation
+  state and marks restored connections `reconnect_required`; it cannot preserve
+  sessions across total Redis loss.
 - Webhook routing state is cache-backed; route loss temporarily increases
   reconciliation latency but does not lose payment correctness because polling
   and the sweeper remain authoritative paths. Heartbeat runs after every token
