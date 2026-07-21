@@ -1,14 +1,79 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+
+final class FailingSquareClientFactory {
+	public static int $calls = 0;
+
+	public function create(): object {
+		++self::$calls;
+		throw new \RuntimeException( 'Square unavailable' );
+	}
+}
+
+final class EmptySquareClientFactory {
+	public function create(): object {
+		return new \stdClass();
+	}
+}
+
+final class EmptySquareDeviceAdapter {
+	public function __construct( object $client ) {
+		unset( $client );
+	}
+
+	public function list_paired_devices( string $location_id ): array {
+		unset( $location_id );
+
+		return array();
+	}
+}
 
 final class PaymentAssetsTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array();
+		$GLOBALS['sqtwc_transients']                              = array();
+		$GLOBALS['sqtwc_registered_scripts']                      = array();
+		$GLOBALS['sqtwc_enqueued_scripts']                        = array();
+		$GLOBALS['sqtwc_registered_styles']                       = array();
+		$GLOBALS['sqtwc_enqueued_styles']                         = array();
+		$GLOBALS['sqtwc_is_checkout']                             = false;
+		$GLOBALS['sqtwc_is_checkout_pay_page']                    = false;
 		Settings::reset_cache_for_tests();
+	}
+
+	public function test_checkout_enqueues_payment_assets(): void {
+		$GLOBALS['sqtwc_is_checkout'] = true;
+
+		( new Gateway() )->enqueue_payment_assets();
+
+		// Regression guard: 0.2.2 restored the cashier controls on WCPOS
+		// checkouts, which are not always is_checkout_pay_page(). Narrowing this
+		// gate to the pay page alone stops the assets loading in the POS.
+		self::assertContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] );
+		self::assertContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_styles'] );
+	}
+
+	public function test_order_pay_page_enqueues_payment_assets(): void {
+		$GLOBALS['sqtwc_is_checkout_pay_page'] = true;
+
+		( new Gateway() )->enqueue_payment_assets();
+
+		self::assertContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] );
+	}
+
+	public function test_ordinary_request_does_not_enqueue_payment_assets(): void {
+		( new Gateway() )->enqueue_payment_assets();
+
+		self::assertNotContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] );
+		self::assertNotContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_styles'] );
 	}
 
 	public function test_sandbox_devices_are_squares_magic_test_ids(): void {
@@ -25,8 +90,78 @@ final class PaymentAssetsTest extends TestCase {
 		}
 	}
 
-	public function test_production_device_list_is_empty_pending_pairing(): void {
+	public function test_production_device_list_uses_environment_and_location_cache(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array(
+			'value'      => array( array( 'id' => 'device_1', 'label' => 'Front' ) ),
+			'expiration' => 300,
+		);
+
+		self::assertSame(
+			array( array( 'id' => 'device_1', 'label' => 'Front' ) ),
+			Gateway::get_available_devices( 'production' )
+		);
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_production_device_list_uses_last_known_good_devices_after_discovery_failure(): void {
+		class_alias( FailingSquareClientFactory::class, SquareClientFactory::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key     = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$devices = array( array( 'id' => 'device_1', 'label' => 'Front' ) );
+		$GLOBALS['sqtwc_transients'][ $key . '_last_known_good' ] = array(
+			'value'      => $devices,
+			'expiration' => 0,
+		);
+
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+		self::assertSame( 1, FailingSquareClientFactory::$calls );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_empty_production_device_list_uses_short_cache_lifetime(): void {
+		class_alias( EmptySquareClientFactory::class, SquareClientFactory::class );
+		class_alias( EmptySquareDeviceAdapter::class, SquareDeviceAdapter::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+
 		self::assertSame( array(), Gateway::get_available_devices( 'production' ) );
+		self::assertSame( 30, $GLOBALS['sqtwc_transients'][ $key ]['expiration'] );
+	}
+
+	public function test_saving_gateway_settings_clears_cached_devices(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment' => 'production',
+			'location_id' => 'LOC',
+		);
+		Settings::reset_cache_for_tests();
+		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array(), 'expiration' => 300 );
+		$GLOBALS['sqtwc_transients'][ $key . '_last_known_good' ] = array( 'value' => array(), 'expiration' => 0 );
+
+		( new Gateway() )->process_admin_options();
+
+		self::assertArrayNotHasKey( $key, $GLOBALS['sqtwc_transients'] );
+		self::assertArrayNotHasKey( $key . '_last_known_good', $GLOBALS['sqtwc_transients'] );
 	}
 
 	public function test_localized_payment_data_carries_ajax_contract(): void {

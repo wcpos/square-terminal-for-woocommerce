@@ -19,10 +19,17 @@ final class Settings {
 	private static ?array $settings = null;
 
 	/**
+	 * Reset the memoized settings after gateway options change.
+	 */
+	public static function reset_cache(): void {
+		self::$settings = null;
+	}
+
+	/**
 	 * Reset settings cache for tests.
 	 */
 	public static function reset_cache_for_tests(): void {
-		self::$settings = null;
+		self::reset_cache();
 	}
 
 	/**
@@ -77,10 +84,19 @@ final class Settings {
 	}
 
 	/**
-	 * Return Square API base URL.
+	 * Return Square API base URL for the configured environment.
 	 */
 	public static function get_base_url(): string {
-		return 'production' === self::get_environment() ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com';
+		return self::get_base_url_for( self::get_environment() );
+	}
+
+	/**
+	 * Return the Square API base URL for a specific environment.
+	 *
+	 * @param string $environment Square environment.
+	 */
+	public static function get_base_url_for( string $environment ): string {
+		return 'production' === $environment ? 'https://connect.squareup.com' : 'https://connect.squareupsandbox.com';
 	}
 
 	/**

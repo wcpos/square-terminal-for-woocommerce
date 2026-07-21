@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.3.0] - 2026-07-21
+
+### Added
+
+- Production Terminal discovery: the device selector is populated from paired Square Device Codes for the configured location, replacing the manual device-ID entry that production installs previously required. Results are cached for five minutes and fall back to the last known good list if Square is unreachable.
+- Terminal pairing controls on the gateway settings screen: **Create Device Code** returns a pairing code to enter on the Terminal, and **Validate Settings** verifies the configured credentials and location against Square. Both act on the values currently shown in the form.
+
+### Fixed
+
+- The **Create Device Code** and **Validate Settings** buttons had no registered handlers and did nothing when clicked.
+
 ## [0.2.2] - 2026-07-21
 
 ### Fixed

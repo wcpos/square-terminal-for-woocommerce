@@ -16,12 +16,18 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\SquareClient;
 final class SquareClientFactory {
 	/**
 	 * Create a Square SDK client.
+	 *
+	 * @param string|null $access_token Square access token override.
+	 * @param string|null $environment  Square environment override.
 	 */
-	public function create(): SquareClient {
+	public function create( ?string $access_token = null, ?string $environment = null ): SquareClient {
+		$access_token = null === $access_token ? Settings::get_access_token() : $access_token;
+		$environment  = null === $environment ? Settings::get_environment() : $environment;
+
 		return new SquareClient(
-			Settings::get_access_token(),
+			$access_token,
 			null,
-			array( 'baseUrl' => Settings::get_base_url() )
+			array( 'baseUrl' => Settings::get_base_url_for( $environment ) )
 		);
 	}
 }
