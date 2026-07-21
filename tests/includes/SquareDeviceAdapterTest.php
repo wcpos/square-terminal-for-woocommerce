@@ -107,6 +107,10 @@ final class SquareDeviceAdapterTest extends TestCase {
 		self::assertSame( 'Front counter', $result[0]['name'] );
 		self::assertSame( 'AVAILABLE', $result[0]['status'] );
 
+		// The monitoring API returns Handhelds and other hardware too; the type
+		// travels with the record so nothing is presented as a Terminal blindly.
+		self::assertSame( 'TERMINAL', $result[0]['type'] );
+
 		// The monitoring identifier must never be offered as a checkout device
 		// ID — sending it to Terminal Checkout fails every payment.
 		self::assertArrayNotHasKey( 'id', $result[0] );

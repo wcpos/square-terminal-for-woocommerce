@@ -100,6 +100,9 @@
 		var parts = [];
 		if (device.label) { parts.push(device.label); }
 		if (device.name && !device.label) { parts.push(device.name); }
+		// Square reports Handhelds and other hardware here too; show the type so
+		// nothing is presented as a Terminal when it isn't one.
+		if (device.type) { parts.push(device.type); }
 		if (device.model) { parts.push(device.model); }
 		if (device.status) { parts.push(device.status); }
 		if (device.id) { parts.push(device.id); }
@@ -132,7 +135,14 @@
 
 		clear(container);
 		renderSection(container, strings.pairedTitle || 'Paired', paired, strings.nonePaired || 'None paired.');
-		renderSection(container, strings.accountTitle || 'Other Terminals', account, strings.noneAtAll || 'None found.', strings.accountNote);
+		renderSection(
+			container,
+			strings.accountTitle || 'Other Terminals',
+			account,
+			// A failed informational lookup is reported as such, never as "none".
+			body && body.account_error ? body.account_error : (strings.noneAtAll || 'None found.'),
+			account.length ? strings.accountNote : ''
+		);
 
 		var template = strings.readersFound || 'Found %1$d paired and %2$d other Terminal(s).';
 		return template.replace('%1$d', String(paired.length)).replace('%2$d', String(account.length));

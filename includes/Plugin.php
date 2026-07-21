@@ -187,33 +187,47 @@ final class Plugin {
 		}
 
 		try {
-			$adapter  = $this->create_device_adapter( $credentials['access_token'], $credentials['environment'] );
-			$paired   = $adapter->list_paired_devices( $credentials['location_id'] );
-			$account  = $adapter->list_account_devices( $credentials['location_id'] );
-
-			Logger::info(
-				'Square reader lookup completed',
-				array(
-					'environment'   => $credentials['environment'],
-					'location_id'   => $credentials['location_id'],
-					'paired_count'  => count( $paired ),
-					'account_count' => count( $account ),
-				)
-			);
-
-			Gateway::delete_device_cache( $credentials['environment'], $credentials['location_id'] );
-
-			$this->send_ajax_response(
-				array(
-					'status'  => 200,
-					'success' => true,
-					'paired'  => $paired,
-					'account' => $account,
-				)
-			);
+			$adapter = $this->create_device_adapter( $credentials['access_token'], $credentials['environment'] );
+			$paired  = $adapter->list_paired_devices( $credentials['location_id'] );
 		} catch ( Throwable $exception ) {
 			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
+			return;
 		}
+
+		// The account listing is informational. Losing it must never discard the
+		// paired list, which is the answer the administrator actually needs.
+		$account       = array();
+		$account_error = '';
+		try {
+			$account = $adapter->list_account_devices( $credentials['location_id'] );
+		} catch ( Throwable $exception ) {
+			$mapped        = ( new SquareErrorMapper() )->map( $exception );
+			$account_error = (string) $mapped['cashier_message'];
+			Logger::warning( 'Square account device lookup failed', $mapped['log_context'] );
+		}
+
+		Logger::info(
+			'Square reader lookup completed',
+			array(
+				'environment'   => $credentials['environment'],
+				'location_id'   => $credentials['location_id'],
+				'paired_count'  => count( $paired ),
+				'account_count' => count( $account ),
+				'account_error' => '' !== $account_error,
+			)
+		);
+
+		Gateway::delete_device_cache( $credentials['environment'], $credentials['location_id'] );
+
+		$this->send_ajax_response(
+			array(
+				'status'        => 200,
+				'success'       => true,
+				'paired'        => $paired,
+				'account'       => $account,
+				'account_error' => $account_error,
+			)
+		);
 	}
 
 	/**
