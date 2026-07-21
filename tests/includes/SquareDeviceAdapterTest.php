@@ -6,6 +6,10 @@ use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\CreateDeviceCodeRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\ListCodesRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Requests\ListDevicesRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Device;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceAttributes;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceStatus;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Locations\Requests\GetLocationsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\CreateDeviceCodeResponse;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceCode;
@@ -55,7 +59,64 @@ final class SpyLocationsClient {
 	}
 }
 
+final class SpyDevicesClient {
+	public ?ListDevicesRequest $list_request = null;
+
+	/** @var array<int,Device> */
+	public array $listed_devices = array();
+
+	public SpyCodesClient $codes;
+
+	public function __construct( SpyCodesClient $codes ) {
+		$this->codes = $codes;
+	}
+
+	public function list( ListDevicesRequest $request ): ArrayIterator {
+		$this->list_request = $request;
+
+		return new ArrayIterator( $this->listed_devices );
+	}
+}
+
 final class SquareDeviceAdapterTest extends TestCase {
+	public function test_list_account_devices_reports_monitoring_records(): void {
+		$codes                  = new SpyCodesClient();
+		$spy                    = new SpyDevicesClient( $codes );
+		$spy->listed_devices    = array(
+			new Device(
+				array(
+					'id'         => 'device:monitoring-1',
+					'attributes' => new DeviceAttributes(
+						array(
+							'type'         => 'TERMINAL',
+							'manufacturer' => 'Square',
+							'model'        => 'Terminal API',
+							'name'         => 'Front counter',
+						)
+					),
+					'status'     => new DeviceStatus( array( 'category' => 'AVAILABLE' ) ),
+				)
+			),
+		);
+		$client = (object) array( 'devices' => $spy );
+
+		$result = ( new SquareDeviceAdapter( $client ) )->list_account_devices( 'LOC' );
+
+		self::assertSame( 'LOC', $spy->list_request->getLocationId() );
+		self::assertCount( 1, $result );
+		self::assertSame( 'Front counter', $result[0]['name'] );
+		self::assertSame( 'AVAILABLE', $result[0]['status'] );
+
+		// The monitoring API returns Handhelds and other hardware too; the type
+		// travels with the record so nothing is presented as a Terminal blindly.
+		self::assertSame( 'TERMINAL', $result[0]['type'] );
+
+		// The monitoring identifier must never be offered as a checkout device
+		// ID — sending it to Terminal Checkout fails every payment.
+		self::assertArrayNotHasKey( 'id', $result[0] );
+		self::assertSame( 'device:monitoring-1', $result[0]['monitoring_id'] );
+	}
+
 	public function test_create_device_code_uses_typed_request(): void {
 		$spy     = new SpyCodesClient();
 		$client  = (object) array( 'devices' => (object) array( 'codes' => $spy ) );

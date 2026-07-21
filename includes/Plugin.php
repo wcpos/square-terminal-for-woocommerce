@@ -67,6 +67,7 @@ final class Plugin {
 		add_action( 'wp_ajax_nopriv_sqtwc_detach_terminal_checkout', array( $this, 'ajax_detach_terminal_checkout' ) );
 		add_action( 'wp_ajax_sqtwc_create_device_code', array( $this, 'ajax_create_device_code' ) );
 		add_action( 'wp_ajax_sqtwc_validate_settings', array( $this, 'ajax_validate_settings' ) );
+		add_action( 'wp_ajax_sqtwc_list_devices', array( $this, 'ajax_list_devices' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		$this->create_payment_sweeper()->register();
@@ -161,6 +162,72 @@ final class Plugin {
 		} catch ( Throwable $exception ) {
 			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
 		}
+	}
+
+	/**
+	 * List Terminals for the settings screen.
+	 *
+	 * Returns both the Device Codes paired through this plugin (selectable at
+	 * checkout) and the Terminals Square reports on the account however they
+	 * were paired (informational). Reporting both is what makes an empty
+	 * selectable list explicable instead of looking like a broken plugin.
+	 */
+	public function ajax_list_devices(): void {
+		$request = $this->get_ajax_request_data();
+		$error   = $this->authorize_admin_request( $request );
+		if ( null !== $error ) {
+			$this->send_ajax_response( $error );
+			return;
+		}
+
+		$credentials = $this->resolve_admin_credentials( $request );
+		if ( '' === $credentials['location_id'] ) {
+			$this->send_ajax_response( $this->admin_error_response( 400, __( 'Square location is required.', 'square-terminal-for-woocommerce' ) ) );
+			return;
+		}
+
+		try {
+			$adapter = $this->create_device_adapter( $credentials['access_token'], $credentials['environment'] );
+			$paired  = $adapter->list_paired_devices( $credentials['location_id'] );
+		} catch ( Throwable $exception ) {
+			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
+			return;
+		}
+
+		// The account listing is informational. Losing it must never discard the
+		// paired list, which is the answer the administrator actually needs.
+		$account       = array();
+		$account_error = '';
+		try {
+			$account = $adapter->list_account_devices( $credentials['location_id'] );
+		} catch ( Throwable $exception ) {
+			$mapped        = ( new SquareErrorMapper() )->map( $exception );
+			$account_error = (string) $mapped['cashier_message'];
+			Logger::warning( 'Square account device lookup failed', $mapped['log_context'] );
+		}
+
+		Logger::info(
+			'Square reader lookup completed',
+			array(
+				'environment'   => $credentials['environment'],
+				'location_id'   => $credentials['location_id'],
+				'paired_count'  => count( $paired ),
+				'account_count' => count( $account ),
+				'account_error' => '' !== $account_error,
+			)
+		);
+
+		Gateway::delete_device_cache( $credentials['environment'], $credentials['location_id'] );
+
+		$this->send_ajax_response(
+			array(
+				'status'        => 200,
+				'success'       => true,
+				'paired'        => $paired,
+				'account'       => $account,
+				'account_error' => $account_error,
+			)
+		);
 	}
 
 	/**

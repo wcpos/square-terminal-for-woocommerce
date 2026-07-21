@@ -9,6 +9,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\CreateDeviceCodeRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\ListCodesRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Requests\ListDevicesRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Locations\Requests\GetLocationsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceCode;
 
@@ -92,6 +93,46 @@ final class SquareDeviceAdapter {
 			$devices[] = array(
 				'id'    => $device_id,
 				'label' => null !== $name && '' !== $name ? $name : $device_id,
+			);
+		}
+
+		return $devices;
+	}
+
+	/**
+	 * List Terminals Square reports on the account, however they were paired.
+	 *
+	 * This is the monitoring Devices API, not the Terminal API. It answers
+	 * "what hardware does Square know about?", which is what makes an empty
+	 * pairing list explicable — a Terminal paired through another application
+	 * appears here but is not selectable for checkouts.
+	 *
+	 * `Device.id` is a monitoring identifier and is NOT valid as a Terminal
+	 * checkout `device_id`; it is deliberately not returned as `id` here.
+	 *
+	 * The monitoring API returns more than Terminals — Handhelds and other
+	 * hardware appear here too. The reported type travels with each record so
+	 * nothing is silently presented as a Terminal. Unknown types are listed
+	 * rather than hidden: the purpose of this list is to show what Square can
+	 * see, and hiding hardware is the failure mode it exists to prevent.
+	 *
+	 * @param string $location_id Square location ID.
+	 * @return array<int,array{monitoring_id:string,name:string,model:string,status:string,type:string}>
+	 */
+	public function list_account_devices( string $location_id ): array {
+		$request = new ListDevicesRequest( array( 'locationId' => $location_id ) );
+		$devices = array();
+
+		foreach ( $this->client->devices->list( $request ) as $device ) {
+			$attributes = $device->getAttributes();
+			$status     = $device->getStatus();
+
+			$devices[] = array(
+				'monitoring_id' => (string) $device->getId(),
+				'name'          => (string) ( $attributes->getName() ?? '' ),
+				'model'         => (string) ( $attributes->getModel() ?? '' ),
+				'status'        => (string) ( $status && $status->getCategory() ? $status->getCategory() : '' ),
+				'type'          => (string) $attributes->getType(),
 			);
 		}
 

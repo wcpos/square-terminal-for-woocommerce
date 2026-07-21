@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.4.0] - 2026-07-22
+
+### Added
+
+- **Check for readers** on the gateway settings screen. Lists Terminals paired through this plugin (selectable at checkout) alongside Terminals Square reports on the account that were paired elsewhere (informational). A Terminal paired outside this plugin cannot be selected for checkouts until it is paired here, and the list now says so instead of simply appearing empty.
+- Environment and Location ID are pre-filled from the official WooCommerce Square plugin when it is configured. Only those two non-secret values are read — access and refresh tokens are never read, copied, stored, or logged, and the field description says so. Values populate the form and are not stored until saved; a value you have already saved always wins.
+
+### Fixed
+
+- Device discovery now logs every outcome — skipped, served from cache, or completed with a count — not only failures. Previously a check that ran and found nothing was indistinguishable in the logs from a check that never ran, which made an empty device selector impossible to diagnose.
+
 ## [0.3.1] - 2026-07-22
 
 ### Fixed
