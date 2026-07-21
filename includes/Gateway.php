@@ -28,6 +28,16 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * Whether the current request has interactive payment fields.
+	 *
+	 * Evaluate this at render time because WooCommerce may instantiate its
+	 * gateway singleton before WordPress has parsed the order-pay query.
+	 */
+	public function has_fields() {
+		return 0 < self::current_pay_order_id();
+	}
+
+	/**
 	 * Register and enqueue the cashier payment assets with localized data.
 	 *
 	 * Enqueued on the order-pay page and checkout, and anywhere a POS context
