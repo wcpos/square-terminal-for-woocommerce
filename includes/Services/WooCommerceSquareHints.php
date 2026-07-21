@@ -46,7 +46,7 @@ final class WooCommerceSquareHints {
 
 		$hints = self::from_public_api();
 
-		if ( '' === $hints['location_id'] ) {
+		if ( '' === $hints['environment'] || '' === $hints['location_id'] ) {
 			$hints = self::from_option( $hints );
 		}
 
@@ -121,7 +121,11 @@ final class WooCommerceSquareHints {
 			return $hints;
 		}
 
-		$settings = get_option( 'wc_square_settings', array() );
+		try {
+			$settings = get_option( 'wc_square_settings', array() );
+		} catch ( Throwable $exception ) {
+			return $hints;
+		}
 
 		// An absent or empty option means the official plugin is not configured.
 		// Inferring an environment from missing keys would default a fresh
@@ -130,13 +134,14 @@ final class WooCommerceSquareHints {
 			return $hints;
 		}
 
-		$environment = 'yes' === ( $settings['enable_sandbox'] ?? '' ) ? 'sandbox' : 'production';
-
 		if ( '' === $hints['environment'] ) {
-			$hints['environment'] = $environment;
+			$is_sandbox          = ( defined( 'WC_SQUARE_SANDBOX' ) && WC_SQUARE_SANDBOX ) || 'yes' === ( $settings['enable_sandbox'] ?? '' );
+			$hints['environment'] = $is_sandbox ? 'sandbox' : 'production';
 		}
 
-		$hints['location_id'] = self::normalize_location( (string) ( $settings[ $environment . '_location_id' ] ?? '' ) );
+		if ( '' === $hints['location_id'] ) {
+			$hints['location_id'] = self::normalize_location( (string) ( $settings[ $hints['environment'] . '_location_id' ] ?? '' ) );
+		}
 
 		return $hints;
 	}

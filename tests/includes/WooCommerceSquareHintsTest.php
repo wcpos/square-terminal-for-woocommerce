@@ -1,6 +1,8 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\WooCommerceSquareHints;
@@ -11,6 +13,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		$GLOBALS['sqtwc_options'] = array();
 		$GLOBALS['sqtwc_wc_square_handler'] = null;
 		$GLOBALS['sqtwc_wc_square_throws'] = false;
+		$GLOBALS['sqtwc_get_option_throws'] = false;
 		WooCommerceSquareHints::reset_cache_for_tests();
 		Settings::reset_cache_for_tests();
 	}
@@ -18,6 +21,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 	protected function tearDown(): void {
 		$GLOBALS['sqtwc_wc_square_handler'] = null;
 		$GLOBALS['sqtwc_wc_square_throws'] = false;
+		$GLOBALS['sqtwc_get_option_throws'] = false;
 		WooCommerceSquareHints::reset_cache_for_tests();
 	}
 
@@ -90,6 +94,58 @@ final class WooCommerceSquareHintsTest extends TestCase {
 
 		self::assertSame( 'sandbox', $hints['environment'] );
 		self::assertSame( 'LFROMAPI', $hints['location_id'] );
+	}
+
+	public function test_option_location_uses_the_public_api_environment(): void {
+		$GLOBALS['sqtwc_options']['wc_square_settings'] = array(
+			'enable_sandbox'         => 'no',
+			'production_location_id' => 'LPRODUCTION',
+			'sandbox_location_id'    => 'LSANDBOX',
+		);
+		$GLOBALS['sqtwc_wc_square_handler'] = new FakeSquareSettingsHandler( 'sandbox', '' );
+
+		$hints = WooCommerceSquareHints::detect();
+
+		self::assertSame( 'sandbox', $hints['environment'] );
+		self::assertSame( 'LSANDBOX', $hints['location_id'] );
+	}
+
+	public function test_option_fills_a_missing_environment_without_replacing_the_api_location(): void {
+		$GLOBALS['sqtwc_options']['wc_square_settings'] = array(
+			'enable_sandbox'      => 'yes',
+			'sandbox_location_id' => 'LFROMOPTION',
+		);
+		$GLOBALS['sqtwc_wc_square_handler'] = new FakeSquareSettingsHandler( '', 'LFROMAPI' );
+
+		$hints = WooCommerceSquareHints::detect();
+
+		self::assertSame( 'sandbox', $hints['environment'] );
+		self::assertSame( 'LFROMAPI', $hints['location_id'] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_option_fallback_respects_the_sandbox_constant(): void {
+		define( 'WC_SQUARE_SANDBOX', true );
+		$GLOBALS['sqtwc_options']['wc_square_settings'] = array(
+			'enable_sandbox'         => 'no',
+			'production_location_id' => 'LPRODUCTION',
+			'sandbox_location_id'    => 'LSANDBOX',
+		);
+
+		$hints = WooCommerceSquareHints::detect();
+
+		self::assertSame( 'sandbox', $hints['environment'] );
+		self::assertSame( 'LSANDBOX', $hints['location_id'] );
+	}
+
+	public function test_a_throwing_option_filter_never_breaks_setup(): void {
+		$GLOBALS['sqtwc_get_option_throws'] = true;
+
+		self::assertSame(
+			array( 'environment' => '', 'location_id' => '' ),
+			WooCommerceSquareHints::detect()
+		);
 	}
 
 	public function test_a_throwing_official_plugin_never_breaks_setup(): void {
