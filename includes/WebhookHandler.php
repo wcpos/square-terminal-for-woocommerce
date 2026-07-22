@@ -45,6 +45,36 @@ final class WebhookHandler {
 		$this->order_lock = $order_lock ?? new OrderLock();
 	}
 
+	/** Option recording the most recent signature-verified webhook. */
+	public const LAST_DELIVERY_OPTION = 'sqtwc_webhook_last_delivery';
+
+	/**
+	 * Record that a signature-verified webhook arrived.
+	 *
+	 * Only verified deliveries are recorded, because this route is public: an
+	 * unauthenticated caller must not be able to write the health state that the
+	 * settings screen reports.
+	 */
+	private static function record_verified_delivery(): void {
+		update_option( self::LAST_DELIVERY_OPTION, time(), false );
+	}
+
+	/**
+	 * Return when a signature-verified webhook last arrived.
+	 *
+	 * @return int|null Unix time, or null when none has ever verified.
+	 */
+	public static function last_verified_delivery(): ?int {
+		$last = get_option( self::LAST_DELIVERY_OPTION, null );
+
+		// Tolerates the 0.6.0 development shape, which stored an array.
+		if ( is_array( $last ) ) {
+			$last = ! empty( $last['verified'] ) ? ( $last['at'] ?? null ) : null;
+		}
+
+		return is_numeric( $last ) ? (int) $last : null;
+	}
+
 	/**
 	 * Handle a Square webhook request.
 	 *
@@ -62,6 +92,12 @@ final class WebhookHandler {
 				'error'  => __( 'Invalid signature.', 'square-terminal-for-woocommerce' ),
 			);
 		}
+
+		// Only verified deliveries are recorded. This route is public, so anyone
+		// could otherwise post a bad signature and make the settings screen claim
+		// webhooks are broken when they are not. A key mismatch still shows,
+		// as the absence of any verified delivery.
+		self::record_verified_delivery();
 
 		$event = json_decode( $body, true );
 		if ( ! is_array( $event ) ) {

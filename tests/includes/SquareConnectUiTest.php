@@ -196,7 +196,10 @@ final class SquareConnectUiTest extends TestCase {
 		self::assertStringContainsString( 'web checkout', $fields['label'] );
 		self::assertStringContainsString( 'not necessary for', $fields['label'] );
 		self::assertStringContainsString( 'wcpos.com', $fields['label'] );
-		self::assertStringContainsString( 'POS uses this gateway automatically', $fields['description'] );
+		self::assertStringContainsString( 'WCPOS uses this gateway automatically', $fields['description'] );
+		// Branded WCPOS, not "WooCommerce POS".
+		self::assertStringContainsString( '>WCPOS<', $fields['label'] );
+		self::assertStringNotContainsString( 'WooCommerce POS', $fields['label'] );
 	}
 
 	public function test_the_callback_url_is_nonce_protected(): void {

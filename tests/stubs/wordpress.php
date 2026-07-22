@@ -46,6 +46,7 @@ if ( ! function_exists( 'wp_send_json' ) ) { function wp_send_json( $response, $
 if ( ! function_exists( '__return_true' ) ) { function __return_true() { return true; } }
 if ( ! function_exists( 'wp_salt' ) ) { function wp_salt( $scheme = 'auth' ) { return 'test-salt'; } }
 if ( ! function_exists( 'time' ) ) { }
+if ( ! function_exists( 'human_time_diff' ) ) { function human_time_diff( $from, $to = 0 ) { $diff = abs( ( $to ? $to : time() ) - $from ); return $diff < 3600 ? max( 1, (int) round( $diff / 60 ) ) . ' mins' : (int) round( $diff / 3600 ) . ' hours'; } }
 if ( ! function_exists( 'rest_url' ) ) { function rest_url( $path = '' ) { return 'https://wcpos.local/wp-json/' . ltrim( $path, '/' ); } }
 if ( ! function_exists( 'wp_create_nonce' ) ) { function wp_create_nonce( $action = -1 ) { return 'nonce'; } }
 if ( ! function_exists( 'admin_url' ) ) { function admin_url( $path = '' ) { return 'https://wcpos.local/wp-admin/' . ltrim( $path, '/' ); } }
