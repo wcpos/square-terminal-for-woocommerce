@@ -220,6 +220,9 @@ final class SquareOAuth {
 			)
 		);
 
+		if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
+			throw new RuntimeException( 'This connection attempt expired. Start again.' );
+		}
 		$this->store( $response, $environment );
 	}
 

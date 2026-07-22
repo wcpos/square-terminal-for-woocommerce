@@ -58,6 +58,7 @@ final class Plugin {
 	public function init(): void {
 		add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 		add_action( 'admin_enqueue_scripts', array( Gateway::class, 'enqueue_admin_assets' ) );
+		add_action( 'admin_notices', array( $this, 'render_square_notice' ) );
 		add_action( 'wp_ajax_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_sqtwc_get_terminal_status', array( $this, 'ajax_get_terminal_status' ) );
@@ -173,6 +174,10 @@ final class Plugin {
 	 */
 	public function handle_square_connect(): void {
 		$this->guard_admin_redirect( 'sqtwc_square_connect' );
+		if ( '' === SquareOAuth::client_id() ) {
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
 
 		try {
 			$url = ( new SquareOAuth() )->begin( self::square_callback_url(), Settings::get_environment() );
@@ -267,6 +272,29 @@ final class Plugin {
 			)
 		);
 		exit;
+	}
+
+	/**
+	 * Render the result of a Square connection redirect.
+	 */
+	public function render_square_notice(): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only result of an admin redirect.
+		$notice = isset( $_GET['sqtwc_notice'] ) ? sanitize_text_field( wp_unslash( $_GET['sqtwc_notice'] ) ) : '';
+		$notices = array(
+			'sqtwc_connected'        => array( 'success', __( 'Square account connected.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_disconnected'     => array( 'success', __( 'Square account disconnected.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_connect_declined' => array( 'error', __( 'Square connection was cancelled.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_connect_failed'   => array( 'error', __( 'Could not connect to Square. Please try again.', 'square-terminal-for-woocommerce' ) ),
+		);
+		if ( ! isset( $notices[ $notice ] ) ) {
+			return;
+		}
+
+		printf(
+			'<div class="notice notice-%1$s is-dismissible"><p>%2$s</p></div>',
+			esc_attr( $notices[ $notice ][0] ),
+			esc_html( $notices[ $notice ][1] )
+		);
 	}
 
 	/**
@@ -476,14 +504,15 @@ final class Plugin {
 			? $posted_environment
 			: Settings::get_environment();
 
-		$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
 		$location_id  = sanitize_text_field( (string) ( $request['location_id'] ?? '' ) );
-		if ( '' === $access_token ) {
-			$access_token = (string) Settings::get( $environment . '_access_token', '' );
-		}
 		$connection = SquareOAuth::connection();
-		if ( '' === $access_token && ( $connection['environment'] ?? '' ) === $environment ) {
+		if ( ( $connection['environment'] ?? '' ) === $environment && '' !== (string) ( $connection['access_token'] ?? '' ) ) {
 			$access_token = (string) ( $connection['access_token'] ?? '' );
+		} else {
+			$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
+			if ( '' === $access_token ) {
+				$access_token = (string) Settings::get( $environment . '_access_token', '' );
+			}
 		}
 
 		return array(

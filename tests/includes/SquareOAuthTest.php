@@ -13,6 +13,8 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\ObtainTokenResponse;
 final class OAuthTestClientFactory {
 	public static ?object $response = null;
 	public static ?RuntimeException $exception = null;
+	/** @var callable|null */
+	public static $after_obtain_token = null;
 	public static array $requests = array();
 	public static array $environments = array();
 
@@ -30,6 +32,9 @@ final class OAuthTestApi {
 		if ( OAuthTestClientFactory::$exception ) {
 			throw OAuthTestClientFactory::$exception;
 		}
+		if ( is_callable( OAuthTestClientFactory::$after_obtain_token ) ) {
+			call_user_func( OAuthTestClientFactory::$after_obtain_token );
+		}
 
 		return OAuthTestClientFactory::$response;
 	}
@@ -39,6 +44,33 @@ final class SquareOAuthTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['sqtwc_options']    = array();
 		$GLOBALS['sqtwc_transients'] = array();
+		OAuthTestClientFactory::$after_obtain_token = null;
+	}
+
+	/**
+	 * Build a complete Square token response for OAuth tests.
+	 *
+	 * @param array<string,mixed> $overrides Values to replace in the default response.
+	 */
+	private function tokenResponse( array $overrides = array() ): ObtainTokenResponse {
+		return new ObtainTokenResponse(
+			array_merge(
+				array(
+					'accessToken'           => 'access-token',
+					'tokenType'             => 'bearer',
+					'expiresAt'             => '2030-01-02T03:04:05Z',
+					'merchantId'            => 'merchant',
+					'subscriptionId'        => null,
+					'planId'                => null,
+					'idToken'               => null,
+					'refreshToken'          => 'refresh-token',
+					'shortLived'            => false,
+					'errors'                => null,
+					'refreshTokenExpiresAt' => '2030-04-02T03:04:05Z',
+				),
+				$overrides
+			)
+		);
 	}
 
 	public function test_verifier_satisfies_the_pkce_character_and_length_rules(): void {
@@ -153,19 +185,11 @@ final class SquareOAuthTest extends TestCase {
 	#[PreserveGlobalState( false )]
 	public function test_concurrent_attempts_preserve_the_first_callback_and_store_its_connection(): void {
 		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
-		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+		OAuthTestClientFactory::$response = $this->tokenResponse(
 			array(
 				'accessToken'           => 'access-one',
-				'tokenType'             => 'bearer',
-				'expiresAt'             => '2030-01-02T03:04:05Z',
 				'merchantId'            => 'merchant-one',
-				'subscriptionId'        => null,
-				'planId'                => null,
-				'idToken'               => null,
 				'refreshToken'          => 'refresh-one',
-				'shortLived'            => false,
-				'errors'                => null,
-				'refreshTokenExpiresAt' => '2030-04-02T03:04:05Z',
 			)
 		);
 		$oauth                           = new SquareOAuth( new OAuthTestClientFactory() );
@@ -188,6 +212,32 @@ final class SquareOAuthTest extends TestCase {
 		self::assertSame( 'sandbox', $connection['environment'] );
 		self::assertFalse( get_transient( 'sqtwc_oauth_pending_' . hash( 'sha256', 'state-one' ) ) );
 		self::assertIsArray( get_transient( 'sqtwc_oauth_pending_' . hash( 'sha256', 'state-two' ) ) );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_disconnect_while_the_token_exchange_is_in_flight_prevents_persistence(): void {
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$response = $this->tokenResponse();
+		$GLOBALS['sqtwc_remote_post_response'] = array(
+			'body' => wp_json_encode( array( 'authorize_url' => 'https://square.test/connect', 'state' => 'pending-state' ) ),
+		);
+		$oauth = new SquareOAuth( new OAuthTestClientFactory() );
+		$oauth->begin( 'https://store.test/callback', 'sandbox' );
+		OAuthTestClientFactory::$after_obtain_token = static function () use ( $oauth ): void {
+			$oauth->disconnect();
+		};
+
+		$exception = null;
+		try {
+			$oauth->complete( 'code', 'pending-state' );
+		} catch ( RuntimeException $caught ) {
+			$exception = $caught;
+		}
+
+		self::assertInstanceOf( RuntimeException::class, $exception );
+		self::assertSame( 'This connection attempt expired. Start again.', $exception->getMessage() );
+		self::assertFalse( SquareOAuth::is_connected() );
 	}
 
 	#[RunInSeparateProcess]
@@ -244,18 +294,10 @@ final class SquareOAuthTest extends TestCase {
 	#[PreserveGlobalState( false )]
 	public function test_refresh_rejects_a_blank_rotated_refresh_token(): void {
 		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
-		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+		OAuthTestClientFactory::$response = $this->tokenResponse(
 			array(
 				'accessToken'           => 'new-access',
-				'tokenType'             => 'bearer',
-				'expiresAt'             => '2030-01-02T03:04:05Z',
-				'merchantId'            => 'merchant',
-				'subscriptionId'        => null,
-				'planId'                => null,
-				'idToken'               => null,
 				'refreshToken'          => '',
-				'shortLived'            => false,
-				'errors'                => null,
 				'refreshTokenExpiresAt' => null,
 			)
 		);
@@ -283,19 +325,10 @@ final class SquareOAuthTest extends TestCase {
 		define( 'SQTWC_SQUARE_SANDBOX_CLIENT_ID', 'sandbox-client-id' );
 		define( 'SQTWC_SQUARE_PRODUCTION_CLIENT_ID', 'production-client-id' );
 		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
-		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+		OAuthTestClientFactory::$response = $this->tokenResponse(
 			array(
 				'accessToken'           => 'rotated-access',
-				'tokenType'             => 'bearer',
-				'expiresAt'             => '2030-01-02T03:04:05Z',
-				'merchantId'            => 'merchant',
-				'subscriptionId'        => null,
-				'planId'                => null,
-				'idToken'               => null,
 				'refreshToken'          => 'rotated-refresh',
-				'shortLived'            => false,
-				'errors'                => null,
-				'refreshTokenExpiresAt' => '2030-04-02T03:04:05Z',
 			)
 		);
 		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ] = array(

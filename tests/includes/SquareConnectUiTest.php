@@ -13,9 +13,11 @@ final class SquareConnectUiTest extends TestCase {
 		$GLOBALS['sqtwc_options']          = array();
 		$GLOBALS['sqtwc_transients']       = array();
 		$GLOBALS['sqtwc_redirects']        = array();
+		$GLOBALS['sqtwc_remote_posts']     = array();
 		$GLOBALS['sqtwc_current_user_can'] = false;
 		$GLOBALS['sqtwc_nonce_valid']      = false;
 		$GLOBALS['sqtwc_filter_overrides'] = array();
+		$_GET                              = array();
 		Gateway::reset_device_memo();
 		WooCommerceSquareHints::reset_cache_for_tests();
 		Settings::reset_cache_for_tests();
@@ -102,6 +104,36 @@ final class SquareConnectUiTest extends TestCase {
 		$this->expectExceptionMessageMatches( '/not allowed/' );
 
 		( new Plugin() )->handle_square_connect();
+	}
+
+	public function test_connect_is_inactive_at_the_server_boundary_without_an_application_id(): void {
+		$GLOBALS['sqtwc_current_user_can'] = true;
+		$GLOBALS['sqtwc_nonce_valid']      = true;
+
+		$location = $this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
+
+		self::assertStringContainsString( 'sqtwc_connect_failed', $location );
+		self::assertSame( array(), $GLOBALS['sqtwc_remote_posts'] );
+	}
+
+	public function test_connection_result_notice_is_registered_and_allowlisted(): void {
+		$GLOBALS['sqtwc_actions'] = array();
+		$plugin                    = new Plugin();
+		$plugin->init();
+
+		self::assertArrayHasKey( 'admin_notices', $GLOBALS['sqtwc_actions'] );
+		$_GET['sqtwc_notice'] = 'sqtwc_connected';
+		ob_start();
+		$GLOBALS['sqtwc_actions']['admin_notices'][0]();
+		$html = (string) ob_get_clean();
+
+		self::assertStringContainsString( 'notice-success', $html );
+		self::assertStringContainsString( 'Square account connected.', $html );
+
+		$_GET['sqtwc_notice'] = '<script>alert(1)</script>';
+		ob_start();
+		$GLOBALS['sqtwc_actions']['admin_notices'][0]();
+		self::assertSame( '', ob_get_clean() );
 	}
 
 	public function test_disconnect_clears_the_connection_and_returns_to_settings(): void {

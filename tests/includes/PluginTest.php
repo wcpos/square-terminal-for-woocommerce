@@ -198,12 +198,13 @@ final class PluginTest extends TestCase {
 
 	#[RunInSeparateProcess]
 	#[PreserveGlobalState( false )]
-	public function test_validate_settings_uses_matching_oauth_credentials_without_a_manual_token(): void {
+	public function test_validate_settings_prefers_matching_oauth_credentials_to_manual_tokens(): void {
 		class_alias( CurrentSettingsSquareClientFactory::class, SquareClientFactory::class );
 		class_alias( CurrentSettingsSquareDeviceAdapter::class, SquareDeviceAdapter::class );
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
-			'environment' => 'sandbox',
-			'location_id' => 'LOC',
+			'environment'             => 'sandbox',
+			'production_access_token' => 'saved-manual-token',
+			'location_id'             => 'LOC',
 		);
 		$GLOBALS['sqtwc_options'][ \WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth::OPTION ] = array(
 			'access_token' => 'oauth-token',
@@ -213,6 +214,7 @@ final class PluginTest extends TestCase {
 		$_POST = array(
 			'_wpnonce'    => 'valid',
 			'environment' => 'production',
+			'access_token' => 'posted-manual-token',
 			'location_id' => 'LOC',
 		);
 
