@@ -13,6 +13,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\WooCommerceSquareHints;
+use WCPOS\WooCommercePOS\SquareTerminal\Utils\CurrencyConverter;
 
 /**
  * Square Terminal payment gateway.
@@ -207,9 +208,12 @@ class Gateway extends \WC_Payment_Gateway {
 	 * @return array<string,mixed>
 	 */
 	public static function get_localized_payment_data(): array {
-		$environment = Settings::get_environment();
+		$environment       = Settings::get_environment();
+		$collection_method = Settings::get_collection_method();
+		$order_id          = self::current_pay_order_id();
+		$order             = $order_id ? wc_get_order( $order_id ) : null;
 
-		return array(
+		$data = array(
 			'ajaxUrl'         => function_exists( 'admin_url' ) ? admin_url( 'admin-ajax.php' ) : '',
 			'nonce'           => function_exists( 'wp_create_nonce' ) ? wp_create_nonce( 'sqtwc_payment' ) : '',
 			'actions'         => array(
@@ -219,7 +223,8 @@ class Gateway extends \WC_Payment_Gateway {
 				'detach' => 'sqtwc_detach_terminal_checkout',
 			),
 			'environment'     => $environment,
-			'devices'         => self::get_available_devices( $environment ),
+			'collectionMethod' => $collection_method,
+			'devices'         => 'terminal' === $collection_method ? self::get_available_devices( $environment ) : array(),
 			'defaultDeviceId' => (string) Settings::get( 'default_device_id', '' ),
 			'debugLog'        => 'yes' === Settings::get( 'checkout_debug_logs', 'no' ),
 			'poll'            => array(
@@ -231,6 +236,25 @@ class Gateway extends \WC_Payment_Gateway {
 			),
 			'strings'         => self::get_localized_strings(),
 		);
+
+		if ( 'pos_app' === $collection_method ) {
+			$data = array_merge(
+				$data,
+				array(
+					'posApplicationId' => Settings::get_pos_application_id(),
+					'posCallbackUrl'   => Settings::get_pos_callback_url(),
+					'posLocationId'   => Settings::get_location_id(),
+					'amount'          => $order ? CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ) : 0,
+					'currency'        => $order ? (string) $order->get_currency() : '',
+					'orderId'         => $order_id,
+					'orderKey'        => $order ? (string) $order->get_order_key() : '',
+					'note'            => $order ? sprintf( 'Order #%s – %s', $order->get_order_number(), get_bloginfo( 'name' ) ) : '',
+					'skipReceipt'     => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
+				)
+			);
+		}
+
+		return $data;
 	}
 
 	/**
@@ -421,6 +445,16 @@ class Gateway extends \WC_Payment_Gateway {
 			'logCopy'            => __( 'Copy', 'square-terminal-for-woocommerce' ),
 			'logClear'           => __( 'Clear', 'square-terminal-for-woocommerce' ),
 			'logCopied'          => __( 'Copied.', 'square-terminal-for-woocommerce' ),
+			'posOpening'         => __( 'Opening Square Point of Sale…', 'square-terminal-for-woocommerce' ),
+			'posWaiting'         => __( 'Waiting for payment in Square Point of Sale…', 'square-terminal-for-woocommerce' ),
+			'posCanceled'        => __( 'Payment was canceled.', 'square-terminal-for-woocommerce' ),
+			'posNotLoggedIn'     => __( 'Sign in to the Square Point of Sale app and try again.', 'square-terminal-for-woocommerce' ),
+			'posNoNetwork'       => __( 'The Square Point of Sale app could not reach the network.', 'square-terminal-for-woocommerce' ),
+			'posUnsupported'     => __( 'Open this payment page on a supported Android or iOS device with the Square Point of Sale app installed.', 'square-terminal-for-woocommerce' ),
+			'posProductionRequired' => __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ),
+			'posOffline'         => __( 'Payment was taken offline in the Square app. The order will need manual verification once the Square app is back online.', 'square-terminal-for-woocommerce' ),
+			/* translators: %s: Square POS app error code. */
+			'posError'           => __( 'Payment was not completed: %s', 'square-terminal-for-woocommerce' ),
 		);
 	}
 
@@ -519,6 +553,25 @@ class Gateway extends \WC_Payment_Gateway {
 				'type'        => 'text',
 				'default'     => $hints['location_id'],
 				'description' => '' !== $hints['location_id'] ? self::hint_description() : __( 'The Square location this Terminal takes payments for.', 'square-terminal-for-woocommerce' ),
+			),
+			'collection_method'        => array(
+				'title'       => __( 'Collection method', 'square-terminal-for-woocommerce' ),
+				'type'        => 'select',
+				'default'     => 'terminal',
+				'options'     => array(
+					'terminal' => __( 'Square Terminal (Terminal API)', 'square-terminal-for-woocommerce' ),
+					'pos_app'  => __( 'Square Point of Sale app (mobile handoff)', 'square-terminal-for-woocommerce' ),
+				),
+				'description' => __( 'Square Terminal uses a paired Square Terminal device. The Square Point of Sale app handoff opens the Square POS app on this device to take payment with a connected Square Reader — open the payment page on the phone or tablet that has the Square app installed.', 'square-terminal-for-woocommerce' ),
+			),
+			'pos_application_id'       => array(
+				'title'       => __( 'Square application ID', 'square-terminal-for-woocommerce' ),
+				'type'        => 'text',
+				'description' => __( 'Create an app in Square Developer Console. Copy its production Application ID (starts with sq0idp-), then register the URL below at Point of Sale API → Web callback URL.', 'square-terminal-for-woocommerce' ),
+			),
+			'pos_callback_url'         => array(
+				'title' => __( 'Web callback URL', 'square-terminal-for-woocommerce' ),
+				'type'  => 'pos_callback_url',
 			),
 
 			'section_terminal'         => array(
@@ -670,7 +723,11 @@ class Gateway extends \WC_Payment_Gateway {
 	public static function render_payment_ui( int $order_id, array $log = array() ): string {
 		unset( $log );
 
-		$order        = $order_id ? wc_get_order( $order_id ) : null;
+		$order = $order_id ? wc_get_order( $order_id ) : null;
+		if ( 'pos_app' === Settings::get_collection_method() ) {
+			return self::render_pos_payment_ui( $order_id, $order );
+		}
+
 		$resume_attrs = self::render_resume_attributes( $order );
 		$debug_logs   = 'yes' === Settings::get( 'checkout_debug_logs', 'no' );
 
@@ -745,6 +802,28 @@ class Gateway extends \WC_Payment_Gateway {
 		return implode( '', $parts );
 	}
 
+	/** Render the mobile Square POS app handoff shell. */
+	private static function render_pos_payment_ui( int $order_id, $order ): string {
+		$currency = $order ? (string) $order->get_currency() : '';
+		$amount   = $order ? CurrencyConverter::to_minor_units( $order->get_total(), $currency ) : 0;
+		$sandbox  = 'production' !== Settings::get_environment();
+
+		return sprintf(
+			'<div id="sqtwc-payment" class="sqtwc-payment" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">'
+			. '<h3 class="sqtwc-payment__heading">%5$s</h3>'
+			. '<div class="sqtwc-payment__actions"><button type="button" id="sqtwc-pos-open" class="button button-primary" data-sqtwc-action="pos-open"%6$s>%7$s</button></div>'
+			. '<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite">%8$s</div></div>',
+			$order_id,
+			esc_attr( $order ? (string) $order->get_order_key() : '' ),
+			$amount,
+			esc_attr( $currency ),
+			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' ),
+			$sandbox ? ' disabled' : '',
+			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' ),
+			$sandbox ? esc_html__( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ) : ''
+		);
+	}
+
 	/**
 	 * Build resume/auth data attributes for an order with an open attempt.
 	 *
@@ -809,6 +888,43 @@ class Gateway extends \WC_Payment_Gateway {
 			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
 			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
 			self::render_webhook_status()
+		);
+	}
+
+	/**
+	 * Render the POS app callback URL settings row.
+	 *
+	 * @param string              $key  Field key.
+	 * @param array<string,mixed> $data Field definition.
+	 */
+	public function generate_pos_callback_url_html( $key, $data ): string {
+		unset( $key );
+
+		return sprintf(
+			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
+			self::render_pos_callback_url()
+		);
+	}
+
+	/** Render the read-only callback URL and environment warning. */
+	public static function render_pos_callback_url(): string {
+		$warning = '';
+		if ( 'pos_app' === Settings::get_collection_method() && 'production' !== Settings::get_environment() ) {
+			$warning = sprintf(
+				'<p class="description"><strong>%s</strong></p>',
+				esc_html__( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' )
+			);
+		}
+
+		return sprintf(
+			'<div class="sqtwc-webhook-copy"><input type="text" id="sqtwc-pos-callback-url" class="sqtwc-webhook-url" value="%1$s" readonly onfocus="this.select()" />'
+			. '<button type="button" class="button" id="sqtwc-copy-pos-callback" data-copied="%2$s" data-failed="%3$s">%4$s</button></div>%5$s',
+			esc_attr( Settings::get_pos_callback_url() ),
+			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
+			esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),
+			$warning
 		);
 	}
 

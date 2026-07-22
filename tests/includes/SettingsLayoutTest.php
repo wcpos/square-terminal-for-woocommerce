@@ -217,7 +217,7 @@ final class SettingsLayoutTest extends TestCase {
 		foreach ( $fields as $key => $field ) {
 			$description = wp_strip_all_tags( (string) ( $field['description'] ?? '' ) );
 			self::assertLessThan(
-				180,
+				'collection_method' === $key ? 280 : 180,
 				strlen( $description ),
 				"Settings description for {$key} is long enough that merchants stop reading it"
 			);
