@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.4.1] - 2026-07-22
+
+### Fixed
+
+- Corrected misleading wording in the reader list. Square's Devices API only reports Terminals that have been set up for Terminal API use — a Terminal running Square POS is invisible to it until it has been paired with a device code. The 0.4.0 wording implied Terminals paired by any means would be listed, so an empty list looked like a fault rather than the expected state before pairing.
+- Device discovery is resolved once per request. WooCommerce builds the localized payment data several times per page render, so each render produced several duplicate cache reads and log entries, drowning the useful entries during setup.
+
 ## [0.4.0] - 2026-07-22
 
 ### Added

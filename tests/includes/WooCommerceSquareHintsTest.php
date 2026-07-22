@@ -15,6 +15,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		$GLOBALS['sqtwc_wc_square_throws'] = false;
 		$GLOBALS['sqtwc_get_option_throws'] = false;
 		WooCommerceSquareHints::reset_cache_for_tests();
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 	}
 
@@ -209,6 +210,7 @@ final class WooCommerceSquareHintsTest extends TestCase {
 			'production_location_id' => 'LFROMSQUARE',
 		);
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'location_id' => 'LMINE' );
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 
 		// A default only fills an unset field; the stored value still wins.

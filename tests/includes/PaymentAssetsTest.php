@@ -46,6 +46,7 @@ final class PaymentAssetsTest extends TestCase {
 		$GLOBALS['sqtwc_enqueued_styles']                         = array();
 		$GLOBALS['sqtwc_is_checkout']                             = false;
 		$GLOBALS['sqtwc_is_checkout_pay_page']                    = false;
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 	}
 
@@ -96,6 +97,7 @@ final class PaymentAssetsTest extends TestCase {
 			'production_access_token' => 'token',
 			'location_id'             => 'LOC',
 		);
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
 		$GLOBALS['sqtwc_transients'][ $key ] = array(
@@ -118,6 +120,7 @@ final class PaymentAssetsTest extends TestCase {
 			'production_access_token' => 'token',
 			'location_id'             => 'LOC',
 		);
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 		$key     = Gateway::get_device_cache_key( 'production', 'LOC' );
 		$devices = array( array( 'id' => 'device_1', 'label' => 'Front' ) );
@@ -141,6 +144,7 @@ final class PaymentAssetsTest extends TestCase {
 			'production_access_token' => 'token',
 			'location_id'             => 'LOC',
 		);
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
 
@@ -148,11 +152,55 @@ final class PaymentAssetsTest extends TestCase {
 		self::assertSame( 30, $GLOBALS['sqtwc_transients'][ $key ]['expiration'] );
 	}
 
+	public function test_repeat_lookups_in_one_request_do_not_re_read_the_cache(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Gateway::reset_device_memo();
+		Settings::reset_cache_for_tests();
+		$key                                 = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$devices                             = array( array( 'id' => 'device_1', 'label' => 'Front' ) );
+		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => $devices, 'expiration' => 300 );
+
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+
+		// WooCommerce builds the localized payment data several times per render.
+		// Without a per-request memo each rebuild re-read the cache and wrote
+		// another log line, drowning the useful entries during setup.
+		unset( $GLOBALS['sqtwc_transients'][ $key ] );
+
+		self::assertSame( $devices, Gateway::get_available_devices( 'production' ) );
+	}
+
+	public function test_invalidation_clears_the_per_request_memo(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment'             => 'production',
+			'production_access_token' => 'token',
+			'location_id'             => 'LOC',
+		);
+		Gateway::reset_device_memo();
+		Settings::reset_cache_for_tests();
+		$key                                 = Gateway::get_device_cache_key( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array(), 'expiration' => 300 );
+
+		self::assertSame( array(), Gateway::get_available_devices( 'production' ) );
+
+		// A lookup straight after pairing must not answer from the pre-pairing memo.
+		$paired                              = array( array( 'id' => 'device_new', 'label' => 'Counter' ) );
+		Gateway::delete_device_cache( 'production', 'LOC' );
+		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => $paired, 'expiration' => 300 );
+
+		self::assertSame( $paired, Gateway::get_available_devices( 'production' ) );
+	}
+
 	public function test_saving_gateway_settings_clears_cached_devices(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
 			'environment' => 'production',
 			'location_id' => 'LOC',
 		);
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 		$key = Gateway::get_device_cache_key( 'production', 'LOC' );
 		$GLOBALS['sqtwc_transients'][ $key ] = array( 'value' => array(), 'expiration' => 300 );
@@ -186,6 +234,7 @@ final class PaymentAssetsTest extends TestCase {
 
 	public function test_debug_log_flag_reflects_setting(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'checkout_debug_logs' => 'yes' );
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 
 		$data = Gateway::get_localized_payment_data();
