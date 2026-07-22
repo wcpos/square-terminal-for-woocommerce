@@ -18,6 +18,7 @@ if ( ! function_exists( 'sanitize_textarea_field' ) ) { function sanitize_textar
 if ( ! function_exists( 'absint' ) ) { function absint( $value ) { return abs( (int) $value ); } }
 if ( ! function_exists( 'esc_html' ) ) { function esc_html( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' ); } }
 if ( ! function_exists( 'esc_attr' ) ) { function esc_attr( $value ) { return htmlspecialchars( (string) $value, ENT_QUOTES, 'UTF-8' ); } }
+if ( ! function_exists( 'wp_strip_all_tags' ) ) { function wp_strip_all_tags( $text, $remove_breaks = false ) { return trim( strip_tags( (string) $text ) ); } }
 if ( ! function_exists( 'esc_url' ) ) { function esc_url( $value ) { return (string) $value; } }
 if ( ! function_exists( '__' ) ) { function __( $text ) { return $text; } }
 if ( ! function_exists( 'esc_html__' ) ) { function esc_html__( $text ) { return $text; } }

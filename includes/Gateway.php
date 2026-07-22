@@ -424,6 +424,25 @@ class Gateway extends \WC_Payment_Gateway {
 		);
 	}
 
+	/** Documentation for this gateway. */
+	private const DOCS_URL = 'https://docs.wcpos.com/payment/gateways/square-terminal';
+
+	/**
+	 * Return a link to the documentation for a section.
+	 *
+	 * Settings rows say what a field is; the guide says how to use it. Repeating
+	 * the guide inline made the screen long enough to stop being read.
+	 *
+	 * @param string $fragment Optional anchor.
+	 */
+	private static function docs_link( string $fragment = '' ): string {
+		return sprintf(
+			'<a href="%1$s" target="_blank" rel="noopener">%2$s</a>',
+			esc_url( self::DOCS_URL . $fragment ),
+			esc_html__( 'Documentation', 'square-terminal-for-woocommerce' )
+		);
+	}
+
 	/**
 	 * Explain where a pre-filled setting came from.
 	 *
@@ -431,7 +450,7 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Square plugin, so a merchant is never left wondering why a value appeared.
 	 */
 	private static function hint_description(): string {
-		return __( 'Pre-filled from your WooCommerce Square settings. Save to apply it. Square credentials are not shared between the two plugins — enter the access token above.', 'square-terminal-for-woocommerce' );
+		return __( 'Pre-filled from WooCommerce Square. Save to apply. Credentials are not shared between the plugins.', 'square-terminal-for-woocommerce' );
 	}
 
 	/**
@@ -469,14 +488,15 @@ class Gateway extends \WC_Payment_Gateway {
 					__( 'Enable Square Terminal for web checkout (not necessary for %s)', 'square-terminal-for-woocommerce' ),
 					'<a href="https://wcpos.com" target="_blank">WCPOS</a>'
 				),
-				'description' => __( 'This enables the gateway for online store checkout. WCPOS uses this gateway automatically when configured.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'WCPOS uses this gateway automatically once configured.', 'square-terminal-for-woocommerce' ),
 				'default'     => 'no',
 			),
 
 			'section_account'          => array(
 				'title'       => __( 'Square account', 'square-terminal-for-woocommerce' ),
 				'type'        => 'title',
-				'description' => __( 'Connect this site to Square, then choose the location the Terminal belongs to.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'Authorize this site with Square, then choose a location.', 'square-terminal-for-woocommerce' )
+					. ' ' . self::docs_link( '#setup' ),
 			),
 			'environment'              => array(
 				'title'       => __( 'Environment', 'square-terminal-for-woocommerce' ),
@@ -488,7 +508,7 @@ class Gateway extends \WC_Payment_Gateway {
 				'default'     => '' !== $hints['environment'] ? $hints['environment'] : 'sandbox',
 				// Chosen before connecting: a connection authorizes one environment
 				// and can never be used against the other.
-				'description' => '' !== $hints['environment'] ? self::hint_description() : __( 'Choose this before connecting. A connection applies only to the environment it was authorized against.', 'square-terminal-for-woocommerce' ),
+				'description' => '' !== $hints['environment'] ? self::hint_description() : __( 'Choose before connecting. A connection covers one environment only.', 'square-terminal-for-woocommerce' ),
 			),
 			'square_connection'        => array(
 				'title' => __( 'Square connection', 'square-terminal-for-woocommerce' ),
@@ -504,7 +524,8 @@ class Gateway extends \WC_Payment_Gateway {
 			'section_terminal'         => array(
 				'title'       => __( 'Terminal', 'square-terminal-for-woocommerce' ),
 				'type'        => 'title',
-				'description' => __( 'Pair a Square Terminal with this site so cashiers can select it at checkout.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'A Terminal must be paired here before cashiers can select it.', 'square-terminal-for-woocommerce' )
+					. ' ' . self::docs_link( '#pairing' ),
 			),
 			'terminal_pairing'         => array(
 				'title' => __( 'Terminal pairing', 'square-terminal-for-woocommerce' ),
@@ -536,7 +557,7 @@ class Gateway extends \WC_Payment_Gateway {
 				'label'       => __( 'Show a copyable debug log panel on the Terminal payment screen', 'square-terminal-for-woocommerce' ),
 				'type'        => 'checkbox',
 				'default'     => 'no',
-				'description' => __( 'Adds a collapsible, copyable log of Terminal payment steps for the cashier. Useful for support; safe to leave off.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'For support. Safe to leave off.', 'square-terminal-for-woocommerce' ),
 			),
 
 			'advanced_start'           => array(
@@ -546,23 +567,23 @@ class Gateway extends \WC_Payment_Gateway {
 			'sandbox_access_token'     => array(
 				'title'       => __( 'Sandbox Access Token', 'square-terminal-for-woocommerce' ),
 				'type'        => 'password',
-				'description' => __( 'Only needed if you are not connecting this site to Square above.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'Only needed if not connected above.', 'square-terminal-for-woocommerce' ),
 			),
 			'production_access_token'  => array(
 				'title'       => __( 'Production Access Token', 'square-terminal-for-woocommerce' ),
 				'type'        => 'password',
-				'description' => __( 'Only needed if you are not connecting this site to Square above.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'Only needed if not connected above.', 'square-terminal-for-woocommerce' ),
 			),
 			'webhook_signature_key'    => array(
 				'title'       => __( 'Webhook Signature Key', 'square-terminal-for-woocommerce' ),
 				'type'        => 'password',
-				'description' => __( 'Optional. Webhooks only reduce how long a payment takes to confirm; polling confirms it either way.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'Optional. Speeds up confirmation; payments confirm without it.', 'square-terminal-for-woocommerce' ),
 			),
 			'webhook_notification_url' => array(
 				'title'       => __( 'Webhook URL override', 'square-terminal-for-woocommerce' ),
 				'type'        => 'text',
 				'placeholder' => Settings::get_default_webhook_url(),
-				'description' => __( 'Leave empty. The plugin uses its own webhook route automatically. Set this only if your public URL differs from the one shown above — behind a proxy or custom domain, for example — because Square signs each webhook over this exact URL.', 'square-terminal-for-woocommerce' ),
+				'description' => __( 'Leave empty unless your public URL differs from the one above, for example behind a proxy.', 'square-terminal-for-woocommerce' ),
 			),
 			'advanced_end'             => array(
 				'title' => '',
@@ -767,7 +788,7 @@ class Gateway extends \WC_Payment_Gateway {
 			esc_html__( 'Check for readers', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Create Device Code', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Validate Settings', 'square-terminal-for-woocommerce' ),
-			esc_html__( 'Square can only see a Terminal once it has been paired with a device code — a Terminal running Square POS is invisible to the API until then. Create Device Code returns a code to enter on the Terminal; Check for readers lists what Square can see; Validate Settings checks the credentials and location above.', 'square-terminal-for-woocommerce' )
+			esc_html__( 'Create Device Code returns a code to enter on the Terminal. Square cannot see a Terminal until it has been paired this way.', 'square-terminal-for-woocommerce' )
 		);
 	}
 
@@ -805,7 +826,7 @@ class Gateway extends \WC_Payment_Gateway {
 			// signature key that does not match — hence naming it here rather than
 			// reporting a rejection this route cannot attribute to Square.
 			$state   = 'info';
-			$message = __( 'No verified webhook received yet. Normal before the first Terminal payment. If payments have already run, check the Webhook Signature Key under Advanced settings matches your Square Developer Dashboard.', 'square-terminal-for-woocommerce' );
+			$message = __( 'No verified webhook yet. Expected before the first payment; otherwise check the Webhook Signature Key under Advanced settings.', 'square-terminal-for-woocommerce' );
 		} else {
 			$state   = 'ok';
 			$message = sprintf(
@@ -822,9 +843,10 @@ class Gateway extends \WC_Payment_Gateway {
 			. '<p class="description">%5$s</p>',
 			esc_attr( $state ),
 			esc_html( $message ),
-			esc_html__( 'Paste this URL into your Square Developer Dashboard webhook subscription:', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Webhook URL for your Square subscription:', 'square-terminal-for-woocommerce' ),
 			esc_attr( Settings::get_webhook_notification_url() ),
-			esc_html__( 'Webhooks only shorten how long a payment takes to confirm. Payments are confirmed by polling either way, so an unconfigured webhook never loses a payment.', 'square-terminal-for-woocommerce' )
+			__( 'Optional — webhooks speed up confirmation; payments confirm without them.', 'square-terminal-for-woocommerce' )
+				. ' ' . self::docs_link( '#webhooks' )
 		);
 	}
 
@@ -936,7 +958,7 @@ class Gateway extends \WC_Payment_Gateway {
 					Settings::get_environment()
 				)
 			),
-			esc_html__( 'Authorize this site with Square instead of pasting an access token. The access token below is only needed if you are not connected.', 'square-terminal-for-woocommerce' )
+			esc_html__( 'No access token needed once connected.', 'square-terminal-for-woocommerce' )
 		);
 	}
 
