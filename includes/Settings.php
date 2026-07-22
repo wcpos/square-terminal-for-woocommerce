@@ -127,6 +127,20 @@ final class Settings {
 	 * Return explicitly configured webhook notification URL.
 	 */
 	public static function get_webhook_notification_url(): string {
-		return (string) self::get( 'webhook_notification_url', '' );
+		$configured = (string) self::get( 'webhook_notification_url', '' );
+
+		// The plugin owns this route, so it knows the URL. Asking a merchant to
+		// retype it only creates a way to get it wrong — and a mismatch breaks
+		// signature verification silently, because Square signs over the
+		// notification URL. The stored value remains an override for sites whose
+		// public URL differs from what WordPress derives.
+		return '' !== $configured ? $configured : self::get_default_webhook_url();
+	}
+
+	/**
+	 * Return the webhook route this plugin actually serves.
+	 */
+	public static function get_default_webhook_url(): string {
+		return function_exists( 'rest_url' ) ? (string) rest_url( 'sqtwc/v1/webhook' ) : '';
 	}
 }

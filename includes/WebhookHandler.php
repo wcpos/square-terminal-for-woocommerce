@@ -45,6 +45,42 @@ final class WebhookHandler {
 		$this->order_lock = $order_lock ?? new OrderLock();
 	}
 
+	/** Option recording the most recent webhook delivery. */
+	public const LAST_DELIVERY_OPTION = 'sqtwc_webhook_last_delivery';
+
+	/**
+	 * Record the outcome of the most recent delivery from Square.
+	 *
+	 * @param bool $verified Whether the signature verified.
+	 */
+	private static function record_delivery( bool $verified ): void {
+		update_option(
+			self::LAST_DELIVERY_OPTION,
+			array(
+				'at'       => time(),
+				'verified' => $verified,
+			),
+			false
+		);
+	}
+
+	/**
+	 * Return the most recent delivery outcome.
+	 *
+	 * @return array{at:int,verified:bool}|null Null when nothing has arrived.
+	 */
+	public static function last_delivery(): ?array {
+		$last = get_option( self::LAST_DELIVERY_OPTION, null );
+		if ( ! is_array( $last ) || ! isset( $last['at'] ) ) {
+			return null;
+		}
+
+		return array(
+			'at'       => (int) $last['at'],
+			'verified' => ! empty( $last['verified'] ),
+		);
+	}
+
 	/**
 	 * Handle a Square webhook request.
 	 *
@@ -57,11 +93,18 @@ final class WebhookHandler {
 		$signature = (string) ( $headers['x-square-hmacsha256-signature'] ?? '' );
 
 		if ( ! $this->verifier->verify( $body, $signature, Settings::get_webhook_signature_key(), Settings::get_webhook_notification_url() ) ) {
+			// Recorded so the settings screen can answer "are webhooks working?".
+			// A rejected signature is the common misconfiguration and is otherwise
+			// invisible: Square keeps delivering and the site keeps refusing.
+			self::record_delivery( false );
+
 			return array(
 				'status' => 401,
 				'error'  => __( 'Invalid signature.', 'square-terminal-for-woocommerce' ),
 			);
 		}
+
+		self::record_delivery( true );
 
 		$event = json_decode( $body, true );
 		if ( ! is_array( $event ) ) {

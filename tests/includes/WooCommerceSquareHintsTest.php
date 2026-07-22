@@ -196,12 +196,16 @@ final class WooCommerceSquareHintsTest extends TestCase {
 		self::assertStringContainsString( 'WooCommerce Square', $gateway->form_fields['location_id']['description'] );
 	}
 
-	public function test_settings_form_is_unchanged_without_hints(): void {
+	public function test_no_prefill_is_claimed_without_hints(): void {
 		$gateway = new Gateway();
 
 		self::assertSame( '', $gateway->form_fields['location_id']['default'] );
-		self::assertSame( '', $gateway->form_fields['location_id']['description'] );
 		self::assertSame( 'sandbox', $gateway->form_fields['environment']['default'] );
+
+		// The field still carries its own help text; what must not appear is a
+		// claim that a value came from the official Square plugin.
+		self::assertStringNotContainsString( 'WooCommerce Square', $gateway->form_fields['location_id']['description'] );
+		self::assertStringNotContainsString( 'WooCommerce Square', $gateway->form_fields['environment']['description'] );
 	}
 
 	public function test_prefill_never_overrides_a_saved_location(): void {

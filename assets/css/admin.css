@@ -1,1 +1,81 @@
-.sqtwc-webhook-url { font-family: monospace; }
+/**
+ * Square Terminal gateway settings screen.
+ *
+ * Deliberately small. The settings screen should look like WordPress admin, so
+ * this styles only the parts WordPress has no convention for.
+ */
+
+/* Collapsible advanced section. A native <details>, so it needs no JavaScript
+   and stays keyboard accessible. */
+.sqtwc-advanced {
+	margin: 1.5em 0 0;
+	border-top: 1px solid #dcdcde;
+	padding-top: 1em;
+}
+
+.sqtwc-advanced__summary {
+	cursor: pointer;
+	font-size: 1.1em;
+	font-weight: 600;
+	color: #1d2327;
+	padding: 0.25em 0;
+}
+
+.sqtwc-advanced__summary:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 2px;
+}
+
+/* Result of Check for readers / Create Device Code / Validate Settings. */
+.sqtwc-admin__status:empty {
+	display: none;
+}
+
+.sqtwc-admin__status {
+	margin: 0.75em 0 0;
+	padding: 0.5em 0.75em;
+	border-left: 4px solid #2271b1;
+	background: #f6f7f7;
+}
+
+.sqtwc-admin__status--error {
+	border-left-color: #d63638;
+}
+
+.sqtwc-admin__readers:empty {
+	display: none;
+}
+
+.sqtwc-admin__readers {
+	margin-top: 0.75em;
+}
+
+.sqtwc-admin__readers h4 {
+	margin: 1em 0 0.25em;
+	font-size: 1em;
+}
+
+.sqtwc-admin__readers ul {
+	margin: 0 0 0.5em 1.5em;
+	list-style: disc;
+}
+
+/* Webhook health. The merchant's question is "is this working?", so the answer
+   leads and the URL to copy follows. */
+.sqtwc-webhook {
+	font-weight: 600;
+	margin: 0 0 0.5em;
+}
+
+.sqtwc-webhook--ok {
+	color: #007017;
+}
+
+.sqtwc-webhook--error {
+	color: #d63638;
+}
+
+.sqtwc-webhook-url {
+	font-family: monospace;
+	background: #f6f7f7;
+}
