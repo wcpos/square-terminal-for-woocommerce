@@ -826,26 +826,31 @@ class Gateway extends \WC_Payment_Gateway {
 			// signature key that does not match — hence naming it here rather than
 			// reporting a rejection this route cannot attribute to Square.
 			$state   = 'info';
-			$message = __( 'No verified webhook yet. Expected before the first payment; otherwise check the Webhook Signature Key under Advanced settings.', 'square-terminal-for-woocommerce' );
+			$message = __( 'Not verified yet', 'square-terminal-for-woocommerce' );
 		} else {
 			$state   = 'ok';
 			$message = sprintf(
 				/* translators: %s: human-readable time difference, for example "5 mins". */
-				__( 'Last webhook received and verified %s ago.', 'square-terminal-for-woocommerce' ),
+				__( 'Verified %s ago', 'square-terminal-for-woocommerce' ),
 				human_time_diff( $last, time() )
 			);
 		}
 
+		// The URL is the whole point of this row, so it gets the width. A truncated
+		// value the merchant has to scroll inside is worse than no field at all.
 		return sprintf(
 			'<p class="sqtwc-webhook sqtwc-webhook--%1$s">%2$s</p>'
-			. '<p class="description">%3$s</p>'
-			. '<input type="text" class="sqtwc-webhook-url large-text" value="%4$s" readonly onfocus="this.select()" />'
-			. '<p class="description">%5$s</p>',
+			. '<div class="sqtwc-webhook-copy">'
+			. '<input type="text" id="sqtwc-webhook-url" class="sqtwc-webhook-url" value="%3$s" readonly onfocus="this.select()" />'
+			. '<button type="button" class="button" id="sqtwc-copy-webhook" data-copied="%4$s">%5$s</button>'
+			. '</div>'
+			. '<p class="description">%6$s</p>',
 			esc_attr( $state ),
 			esc_html( $message ),
-			esc_html__( 'Webhook URL for your Square subscription:', 'square-terminal-for-woocommerce' ),
 			esc_attr( Settings::get_webhook_notification_url() ),
-			__( 'Optional — webhooks speed up confirmation; payments confirm without them.', 'square-terminal-for-woocommerce' )
+			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Add this URL in Square. Optional.', 'square-terminal-for-woocommerce' )
 				. ' ' . self::docs_link( '#webhooks' )
 		);
 	}

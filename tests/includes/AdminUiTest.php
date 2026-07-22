@@ -69,6 +69,16 @@ final class AdminUiTest extends TestCase {
 		self::assertStringContainsString( 'textContent', $js );
 	}
 
+	public function test_admin_js_copies_the_webhook_url_with_a_fallback(): void {
+		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
+
+		self::assertStringContainsString( 'sqtwc-copy-webhook', $js );
+		// The async Clipboard API needs a secure context and plenty of WordPress
+		// admins are served over plain http, so a fallback is required.
+		self::assertStringContainsString( 'navigator.clipboard', $js );
+		self::assertStringContainsString( 'execCommand', $js );
+	}
+
 	public function test_admin_js_binds_buttons_and_sends_the_nonce(): void {
 		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
 

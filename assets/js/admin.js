@@ -179,8 +179,42 @@
 		sync();
 	}
 
+	/**
+	 * Copy the webhook URL, so it never has to be selected out of a narrow box.
+	 */
+	function bindCopyWebhook() {
+		var button = document.getElementById('sqtwc-copy-webhook');
+		var input = document.getElementById('sqtwc-webhook-url');
+		if (!button || !input) {
+			return;
+		}
+
+		var original = button.textContent;
+
+		button.addEventListener('click', function () {
+			input.select();
+
+			function done() {
+				button.textContent = button.getAttribute('data-copied') || 'Copied';
+				window.setTimeout(function () { button.textContent = original; }, 2000);
+			}
+
+			// execCommand is the fallback: the async Clipboard API needs a secure
+			// context, and plenty of WordPress admins are served over plain http.
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(input.value).then(done, function () {
+					try { document.execCommand('copy'); done(); } catch (e) {}
+				});
+				return;
+			}
+
+			try { document.execCommand('copy'); done(); } catch (e) {}
+		});
+	}
+
 	function init() {
 		trackEnvironment();
+		bindCopyWebhook();
 		bind('sqtwc-check-readers', 'sqtwc_list_devices', renderReaders);
 		bind('sqtwc-create-device-code', 'sqtwc_create_device_code', function (body) {
 			var template = strings.pairingCode || 'Pairing code: %s';

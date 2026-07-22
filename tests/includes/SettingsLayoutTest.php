@@ -116,7 +116,7 @@ final class SettingsLayoutTest extends TestCase {
 	public function test_webhook_status_reports_that_nothing_has_arrived_yet(): void {
 		$html = Gateway::render_webhook_status();
 
-		self::assertStringContainsString( 'No verified webhook yet', $html );
+		self::assertStringContainsString( 'Not verified yet', $html );
 		self::assertStringContainsString( 'sqtwc-webhook--info', $html );
 	}
 
@@ -135,7 +135,7 @@ final class SettingsLayoutTest extends TestCase {
 
 		$html = Gateway::render_webhook_status();
 
-		self::assertStringContainsString( 'received and verified', $html );
+		self::assertStringContainsString( 'Verified', $html );
 		self::assertStringContainsString( 'sqtwc-webhook--ok', $html );
 	}
 
@@ -149,7 +149,7 @@ final class SettingsLayoutTest extends TestCase {
 		// A delivery verified under the old key says nothing about the new one,
 		// and would mask exactly the broken setup this row exists to reveal.
 		self::assertNull( WebhookHandler::last_verified_delivery() );
-		self::assertStringContainsString( 'No verified webhook yet', Gateway::render_webhook_status() );
+		self::assertStringContainsString( 'Not verified yet', Gateway::render_webhook_status() );
 	}
 
 	public function test_a_legacy_health_record_is_not_treated_as_current(): void {
@@ -159,7 +159,7 @@ final class SettingsLayoutTest extends TestCase {
 		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = time() - 60;
 
 		self::assertNull( WebhookHandler::last_verified_delivery() );
-		self::assertStringContainsString( 'No verified webhook yet', Gateway::render_webhook_status() );
+		self::assertStringContainsString( 'Not verified yet', Gateway::render_webhook_status() );
 	}
 
 	public function test_health_does_not_survive_a_change_of_environment(): void {
@@ -180,15 +180,25 @@ final class SettingsLayoutTest extends TestCase {
 		);
 
 		self::assertNull( WebhookHandler::last_verified_delivery() );
-		self::assertStringContainsString( 'No verified webhook yet', Gateway::render_webhook_status() );
+		self::assertStringContainsString( 'Not verified yet', Gateway::render_webhook_status() );
 	}
 
-	public function test_no_verified_delivery_names_the_signature_key(): void {
+	public function test_the_webhook_url_is_fully_visible_and_copyable(): void {
 		$html = Gateway::render_webhook_status();
 
-		// A key mismatch shows up as the absence of any verified delivery, so the
-		// actionable hint belongs in that state.
-		self::assertStringContainsString( 'Webhook Signature Key', $html );
+		// The URL is the point of this row. A box too narrow to show it, that the
+		// merchant has to scroll inside and select by hand, is worse than none.
+		self::assertStringContainsString( 'sqtwc-webhook-copy', $html );
+		self::assertStringContainsString( 'id="sqtwc-copy-webhook"', $html );
+		self::assertStringContainsString( 'readonly', $html );
+		self::assertStringNotContainsString( 'large-text', $html );
+	}
+
+	public function test_the_webhook_row_stays_short(): void {
+		$text = trim( wp_strip_all_tags( Gateway::render_webhook_status() ) );
+
+		// Diagnosis detail belongs in the guide, not on the settings screen.
+		self::assertLessThan( 220, strlen( $text ), 'The webhook row has grown wordy again' );
 	}
 
 	public function test_sections_link_to_the_documentation_instead_of_explaining_inline(): void {
