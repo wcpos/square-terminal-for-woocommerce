@@ -10,6 +10,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal;
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\PosTransactionVerifier;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
@@ -32,6 +33,9 @@ final class Plugin {
 	/** @var SquareDeviceAdapter|object|null */
 	private $device_adapter;
 
+	/** @var PosCallbackHandler|object|null */
+	private $pos_callback_handler;
+
 	/** @var OrderLock */
 	private OrderLock $order_lock;
 
@@ -42,14 +46,16 @@ final class Plugin {
 	 * @param WebhookHandler|object|null  $webhook_handler  Optional injected webhook handler.
 	 * @param PaymentSweeper|object|null  $payment_sweeper  Optional injected payment sweeper.
 	 * @param OrderLock|null              $order_lock       Optional shared order lock.
-	 * @param SquareDeviceAdapter|object|null $device_adapter Optional injected Device Code adapter.
+	 * @param SquareDeviceAdapter|object|null $device_adapter       Optional injected Device Code adapter.
+	 * @param PosCallbackHandler|object|null  $pos_callback_handler Optional injected POS callback handler.
 	 */
-	public function __construct( $ajax_handler = null, $webhook_handler = null, $payment_sweeper = null, ?OrderLock $order_lock = null, $device_adapter = null ) {
+	public function __construct( $ajax_handler = null, $webhook_handler = null, $payment_sweeper = null, ?OrderLock $order_lock = null, $device_adapter = null, $pos_callback_handler = null ) {
 		$this->ajax_handler    = $ajax_handler;
 		$this->webhook_handler = $webhook_handler;
 		$this->payment_sweeper = $payment_sweeper;
 		$this->order_lock      = $order_lock ?? new OrderLock();
 		$this->device_adapter  = $device_adapter;
+		$this->pos_callback_handler = $pos_callback_handler;
 	}
 
 	/**
@@ -88,6 +94,15 @@ final class Plugin {
 			array(
 				'methods'             => 'POST',
 				'callback'            => array( $this, 'handle_webhook' ),
+				'permission_callback' => '__return_true',
+			)
+		);
+		register_rest_route(
+			'sqtwc/v1',
+			'/pos-callback',
+			array(
+				'methods'             => array( 'GET', 'POST' ),
+				'callback'            => array( $this, 'handle_pos_callback' ),
 				'permission_callback' => '__return_true',
 			)
 		);
@@ -489,6 +504,16 @@ final class Plugin {
 	}
 
 	/**
+	 * Handle the Square POS app browser callback.
+	 *
+	 * @param object $request REST request.
+	 */
+	public function handle_pos_callback( $request ): void {
+		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+		$this->create_pos_callback_handler()->handle( $params );
+	}
+
+	/**
 	 * Create the AJAX handler with a configured Square adapter.
 	 */
 	private function create_ajax_handler() {
@@ -559,6 +584,16 @@ final class Plugin {
 		}
 
 		return $this->webhook_handler;
+	}
+
+	/** Create or return the configured POS callback handler. */
+	private function create_pos_callback_handler() {
+		if ( null === $this->pos_callback_handler ) {
+			$verifier = new PosTransactionVerifier( ( new SquareClientFactory() )->create() );
+			$this->pos_callback_handler = new PosCallbackHandler( $verifier, $this->order_lock );
+		}
+
+		return $this->pos_callback_handler;
 	}
 
 	/**

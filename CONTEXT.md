@@ -40,6 +40,18 @@ _Avoid_: payment intent, reader checkout, charge request
 The Square payment produced when a Terminal Checkout completes successfully. A WooCommerce order may store one or more Square `payment_ids` from the completed Terminal Checkout.
 _Avoid_: transaction only, checkout, intent
 
+**Collection Method**:
+The configured way this gateway sends an in-person payment to Square: either a paired Square Terminal through Terminal API or a Square Point of Sale app handoff on the cashier's mobile device.
+_Avoid_: payment type, tender type
+
+**POS App Handoff**:
+A production-only mobile web flow that opens the Square Point of Sale app to collect a card payment with a connected Square Reader. It does not support Square Sandbox or cash tenders.
+_Avoid_: Terminal Checkout, polling flow
+
+**POS Callback**:
+The public browser return route used after a POS App Handoff. Its callback values are untrusted: the returned `transaction_id` is a Square Order ID, and WooCommerce changes money state only after the server resolves that order's tenders to completed Square Payments, validates the order key, amount, currency, and location, and enforces single use.
+_Avoid_: webhook, payment confirmation
+
 **Square Identifier**:
 A Square-generated ID stored on a WooCommerce order so future operations or support can trace the corresponding Terminal Checkout and Terminal Payment.
 _Avoid_: refund handle, local transaction key

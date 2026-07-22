@@ -9,3 +9,7 @@ License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
 Collect WooCommerce order payments on Square Terminal devices.
+
+== Collection methods ==
+
+Choose Square Terminal for paired Terminal API hardware, or Square Point of Sale app handoff to open the Square POS app on a supported phone or tablet with a connected Square Reader. POS app handoff accepts card tenders only and requires Square's production environment.

@@ -183,8 +183,13 @@
 	 * Copy the webhook URL, so it never has to be selected out of a narrow box.
 	 */
 	function bindCopyWebhook() {
-		var button = document.getElementById('sqtwc-copy-webhook');
-		var input = document.getElementById('sqtwc-webhook-url');
+		bindCopyUrl('sqtwc-copy-webhook', 'sqtwc-webhook-url');
+		bindCopyUrl('sqtwc-copy-pos-callback', 'sqtwc-pos-callback-url');
+	}
+
+	function bindCopyUrl(buttonId, inputId) {
+		var button = document.getElementById(buttonId);
+		var input = document.getElementById(inputId);
 		if (!button || !input) {
 			return;
 		}

@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## Unreleased
+
+### Added
+
+- **Square Point of Sale app handoff.** Merchants can choose a mobile handoff collection method that opens the Square POS app on Android or iOS for card payment with a connected Square Reader. The public browser callback requires the WooCommerce order key, resolves the returned Square Order ID through Square's Orders and Payments APIs, and completes the WooCommerce order only from server-verified completed payments. POS app handoff is production-only and does not support Square Sandbox.
+
 ## [0.7.1] - 2026-07-22
 
 ### Fixed

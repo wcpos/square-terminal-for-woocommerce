@@ -57,6 +57,9 @@
 	function createController(env) {
 		var root = env.root;
 		var config = env.config || {};
+		if (config.collectionMethod === 'pos_app') {
+			return createPosController(env);
+		}
 		var doc = env.doc || (root && root.ownerDocument) || (typeof document !== 'undefined' ? document : null);
 		var fetchImpl = env.fetch;
 		var setTimeoutImpl = env.setTimeout;
@@ -849,6 +852,169 @@
 		}
 	}
 
+	// ---- Square Point of Sale app handoff -------------------------------
+
+	function buildPosState(cfg) {
+		return JSON.stringify({ o: Number(cfg.orderId), k: String(cfg.orderKey || '') });
+	}
+
+	function buildAndroidPosUrl(cfg) {
+		var parts = [
+			'intent:#Intent',
+			'action=com.squareup.pos.action.CHARGE',
+			'package=com.squareup',
+			// Fallback lands where the cashier can recover (the order-pay page),
+			// not the bare callback route, which rejects state-less requests.
+			'S.browser_fallback_url=' + encodeURIComponent(cfg.fallbackUrl || cfg.posCallbackUrl),
+			'S.com.squareup.pos.WEB_CALLBACK_URI=' + encodeURIComponent(cfg.posCallbackUrl),
+			'S.com.squareup.pos.CLIENT_ID=' + encodeURIComponent(cfg.posApplicationId),
+			'S.com.squareup.pos.API_VERSION=v2.0',
+			'i.com.squareup.pos.TOTAL_AMOUNT=' + Number(cfg.amount),
+			'S.com.squareup.pos.CURRENCY_CODE=' + encodeURIComponent(cfg.currency),
+			'S.com.squareup.pos.TENDER_TYPES=com.squareup.pos.TENDER_CARD'
+		];
+		if (cfg.posLocationId) {
+			parts.push('S.com.squareup.pos.LOCATION_ID=' + encodeURIComponent(cfg.posLocationId));
+		}
+		parts.push('S.com.squareup.pos.REQUEST_METADATA=' + encodeURIComponent(cfg.state));
+		if (cfg.note) {
+			parts.push('S.com.squareup.pos.NOTE=' + encodeURIComponent(cfg.note));
+		}
+		parts.push('l.com.squareup.pos.AUTO_RETURN_TIMEOUT_MS=3200', 'end');
+		return parts.join(';');
+	}
+
+	function buildIosPosUrl(cfg) {
+		var data = {
+			amount_money: { amount: Number(cfg.amount), currency_code: String(cfg.currency) },
+			callback_url: String(cfg.posCallbackUrl),
+			client_id: String(cfg.posApplicationId),
+			version: '1.3'
+		};
+		if (cfg.posLocationId) {
+			data.location_id = String(cfg.posLocationId);
+		}
+		data.state = String(cfg.state);
+		if (cfg.note) {
+			data.notes = String(cfg.note);
+		}
+		data.options = {
+			supported_tender_types: ['CREDIT_CARD'],
+			auto_return: true,
+			skip_receipt: !!cfg.skipReceipt
+		};
+		return 'square-commerce-v1://payment/create?data=' + encodeURIComponent(JSON.stringify(data));
+	}
+
+	function detectPosPlatform(userAgent, maxTouchPoints) {
+		userAgent = String(userAgent || '');
+		if (/Android/i.test(userAgent)) {
+			return 'android';
+		}
+		if (/iPhone|iPad|iPod/i.test(userAgent) || (/Macintosh/i.test(userAgent) && Number(maxTouchPoints) > 1)) {
+			return 'ios';
+		}
+		return 'unsupported';
+	}
+
+	function createPosController(env) {
+		var root = env.root;
+		var config = env.config || {};
+		var strings = config.strings || {};
+		var button = root.querySelector('[data-sqtwc-action="pos-open"]');
+		var status = root.querySelector('#sqtwc-status');
+		var userAgent = env.userAgent !== undefined ? env.userAgent : (typeof navigator !== 'undefined' ? navigator.userAgent : '');
+		var maxTouchPoints = env.maxTouchPoints !== undefined ? env.maxTouchPoints : (typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0);
+		var locationRef = env.location || (typeof window !== 'undefined' ? window.location : { search: '' });
+		var navigate = env.navigate || function () {};
+		var platform = detectPosPlatform(userAgent, maxTouchPoints);
+
+		var controller = {
+			handleAction: function (action) {
+				if (action !== 'pos-open' || !button || button.disabled) {
+					return;
+				}
+				setPosStatus(strings.posOpening);
+				button.disabled = true;
+				var cfg = copyObject(config);
+				cfg.state = buildPosState(config);
+				cfg.fallbackUrl = String(locationRef.href || '');
+				navigate(platform === 'android' ? buildAndroidPosUrl(cfg) : buildIosPosUrl(cfg));
+			},
+			beaconCancel: function () { return false; }
+		};
+
+		initPos();
+		return controller;
+
+		function initPos() {
+			if (config.environment !== 'production') {
+				disable(button, true);
+				setPosStatus(strings.posProductionRequired);
+				return;
+			}
+			if (!config.posApplicationId || !config.posLocationId) {
+				disable(button, true);
+				setPosStatus(strings.posMissingConfig);
+				return;
+			}
+
+			var params = parseQuery(locationRef.search || '');
+			if (params.sqtwc_pos_result === 'partial') {
+				disable(button, true);
+				setPosStatus(strings.posPartial);
+				return;
+			}
+			if (params.sqtwc_pos_result === 'offline') {
+				disable(button, false);
+				setPosStatus(strings.posOffline);
+				return;
+			}
+			if (params.sqtwc_pos_result === 'error') {
+				disable(button, false);
+				setPosStatus(posErrorMessage(params.sqtwc_pos_code || ''));
+				return;
+			}
+			if (platform === 'unsupported') {
+				disable(button, true);
+				setPosStatus(strings.posUnsupported);
+			}
+		}
+
+		function posErrorMessage(code) {
+			if (code === 'payment_canceled') { return strings.posCanceled; }
+			if (code === 'not_logged_in') { return strings.posNotLoggedIn; }
+			if (code === 'no_network') { return strings.posNoNetwork; }
+			return String(strings.posError || '').replace('%s', code);
+		}
+
+		function setPosStatus(message) {
+			if (status) {
+				setText(status, message || '');
+			}
+		}
+	}
+
+	function parseQuery(search) {
+		var params = {};
+		String(search || '').replace(/^\?/, '').split('&').forEach(function (part) {
+			if (!part) { return; }
+			var pair = part.split('=');
+			params[decodeURIComponent(pair[0])] = decodeURIComponent((pair.slice(1).join('=') || '').replace(/\+/g, ' '));
+		});
+		return params;
+	}
+
+	function copyObject(source) {
+		var copy = {};
+		for (var key in source) {
+			if (Object.prototype.hasOwnProperty.call(source, key)) {
+				copy[key] = source[key];
+			}
+		}
+		return copy;
+	}
+
 	// ---- Module-level DOM/util helpers ----------------------------------
 
 	function isFinalStatus(status) {
@@ -993,7 +1159,10 @@
 				sessionStorage: safeStorage(win, 'sessionStorage'),
 				localStorage: safeStorage(win, 'localStorage'),
 				navigate: function (url) { if (win && win.location) { win.location.assign(url); } },
-				sendBeacon: (win && win.navigator && win.navigator.sendBeacon) ? win.navigator.sendBeacon.bind(win.navigator) : null
+				sendBeacon: (win && win.navigator && win.navigator.sendBeacon) ? win.navigator.sendBeacon.bind(win.navigator) : null,
+				userAgent: win && win.navigator ? win.navigator.userAgent : '',
+				maxTouchPoints: win && win.navigator ? win.navigator.maxTouchPoints : 0,
+				location: win && win.location ? win.location : { search: '' }
 			});
 
 			controllers.push(controller);
@@ -1043,7 +1212,11 @@
 		createController: createController,
 		boot: boot,
 		STATES: STATES,
-		isFinalStatus: isFinalStatus
+		isFinalStatus: isFinalStatus,
+		buildPosState: buildPosState,
+		buildAndroidPosUrl: buildAndroidPosUrl,
+		buildIosPosUrl: buildIosPosUrl,
+		detectPosPlatform: detectPosPlatform
 	};
 
 	if (typeof module === 'object' && module.exports) {

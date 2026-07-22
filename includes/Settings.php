@@ -101,6 +101,32 @@ final class Settings {
 	}
 
 	/**
+	 * Return the configured payment collection method.
+	 */
+	public static function get_collection_method(): string {
+		return 'pos_app' === self::get( 'collection_method', 'terminal' ) ? 'pos_app' : 'terminal';
+	}
+
+	/**
+	 * Return the production Square application ID used by POS handoff.
+	 */
+	public static function get_pos_application_id(): string {
+		return (string) self::get( 'pos_application_id', '' );
+	}
+
+	/**
+	 * Return the POS app web callback route.
+	 *
+	 * Sites behind a proxy whose derived REST URL differs from the public
+	 * HTTPS URL registered with Square can correct it via the filter.
+	 */
+	public static function get_pos_callback_url(): string {
+		$url = function_exists( 'rest_url' ) ? (string) rest_url( 'sqtwc/v1/pos-callback' ) : '';
+
+		return (string) apply_filters( 'sqtwc_pos_callback_url', $url );
+	}
+
+	/**
 	 * Return Square API base URL for the configured environment.
 	 */
 	public static function get_base_url(): string {
