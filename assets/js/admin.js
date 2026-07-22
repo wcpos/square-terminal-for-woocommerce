@@ -148,7 +148,39 @@
 		return template.replace('%1$d', String(paired.length)).replace('%2$d', String(account.length));
 	}
 
+	/**
+	 * Keep the Connect link pointed at the environment currently on screen.
+	 *
+	 * Connect is a link, so an unsaved dropdown change would otherwise be
+	 * ignored and someone selecting Production would authorize the sandbox
+	 * application. The server validates and persists whatever arrives here.
+	 */
+	function trackEnvironment() {
+		var select = document.getElementById('woocommerce_sqtwc_environment');
+		var link = document.getElementById('sqtwc-connect-link');
+		if (!select || !link) {
+			return;
+		}
+
+		var base = link.getAttribute('href');
+
+		function sync() {
+			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value));
+
+			// The label has to move with the link. Updating only the URL would
+			// leave the button reading "sandbox" while starting a production
+			// authorization — worse than the bug this whole thing fixes.
+			if (strings.connectLabel) {
+				link.textContent = strings.connectLabel.replace('%s', select.value);
+			}
+		}
+
+		select.addEventListener('change', sync);
+		sync();
+	}
+
 	function init() {
+		trackEnvironment();
 		bind('sqtwc-check-readers', 'sqtwc_list_devices', renderReaders);
 		bind('sqtwc-create-device-code', 'sqtwc_create_device_code', function (body) {
 			var template = strings.pairingCode || 'Pairing code: %s';
