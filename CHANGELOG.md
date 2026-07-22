@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.7.1] - 2026-07-22
+
+### Fixed
+
+- **WCPOS Terminal checkouts no longer fail with “Invalid nonce.”** WCPOS renders the order-pay page as the customer but submits payment AJAX as the cashier, so a normal WordPress nonce is tied to the wrong user. Payment actions now accept the existing order key or signed payment token as the durable order-scoped credential; capability-only requests still require a valid nonce, and empty order keys are rejected.
+
 ## [0.7.0] - 2026-07-22
 
 ### Changed
