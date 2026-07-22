@@ -424,7 +424,13 @@ final class AjaxHandler {
 			return array( 'error' => $this->error_response( 404, __( 'Order not found.', 'square-terminal-for-woocommerce' ) ) );
 		}
 
-		if ( $this->requires_nonce() && ! wp_verify_nonce( $request['_wpnonce'] ?? '', 'sqtwc_payment' ) ) {
+		$has_order_key = isset( $request['order_key'] )
+			&& '' !== (string) $request['order_key']
+			&& hash_equals( (string) $order->get_order_key(), (string) $request['order_key'] );
+		$has_payment_token = isset( $request['payment_request_token'] )
+			&& PaymentRequestToken::verify( (string) $request['payment_request_token'], (int) $order->get_id() );
+
+		if ( $this->requires_nonce() && ! $has_order_key && ! $has_payment_token && ! wp_verify_nonce( $request['_wpnonce'] ?? '', 'sqtwc_payment' ) ) {
 			return array( 'error' => $this->error_response( 403, __( 'Invalid nonce.', 'square-terminal-for-woocommerce' ) ) );
 		}
 
