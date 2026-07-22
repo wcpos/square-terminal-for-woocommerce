@@ -303,7 +303,7 @@
 			var value = input.value.trim();
 			status.className = 'sqtwc-setup__input-status';
 			if (!value) { status.textContent = ''; return; }
-			if (/^sq0idp-[\w-]{8,}$/.test(value)) {
+			if (/^sq0idp-[A-Za-z0-9_-]{22}$/.test(value)) {
 				status.textContent = strings.applicationIdValid || '✓ That looks right';
 				status.className += ' sqtwc-setup__input-status--ok';
 			} else if (value.indexOf('sandbox-') === 0) {

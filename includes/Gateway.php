@@ -241,10 +241,11 @@ class Gateway extends \WC_Payment_Gateway {
 		);
 
 		if ( 'pos_app' === $collection_method ) {
+			$pos_application_id = Settings::get_pos_application_id();
 			$data = array_merge(
 				$data,
 				array(
-					'posApplicationId' => Settings::get_pos_application_id(),
+					'posApplicationId' => 1 === preg_match( '/^sq0idp-[A-Za-z0-9_-]{22}\z/', $pos_application_id ) ? $pos_application_id : '',
 					'posCallbackUrl'   => Settings::get_pos_callback_url(),
 					'posLocationId'   => Settings::get_location_id(),
 					'amount'          => $order ? CurrencyConverter::to_minor_units( $order->get_total(), $order->get_currency() ) : 0,
@@ -455,7 +456,7 @@ class Gateway extends \WC_Payment_Gateway {
 			'posNoNetwork'       => __( 'The Square Point of Sale app could not reach the network.', 'square-terminal-for-woocommerce' ),
 			'posUnsupported'     => __( 'Open this payment page on a supported Android or iOS device with the Square Point of Sale app installed.', 'square-terminal-for-woocommerce' ),
 			'posProductionRequired' => __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ),
-			'posMissingConfig'   => __( 'Add your Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' ),
+			'posMissingConfig'   => __( 'Add a valid Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' ),
 			'posPartial'         => __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' ),
 			'posOffline'         => __( 'Payment was taken offline in the Square app. The order will need manual verification once the Square app is back online.', 'square-terminal-for-woocommerce' ),
 			/* translators: %s: Square POS app error code. */
@@ -826,8 +827,8 @@ class Gateway extends \WC_Payment_Gateway {
 		if ( 'production' !== Settings::get_environment() ) {
 			return __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' );
 		}
-		if ( '' === Settings::get_pos_application_id() || '' === Settings::get_location_id() ) {
-			return __( 'Add your Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' );
+		if ( 1 !== preg_match( '/^sq0idp-[A-Za-z0-9_-]{22}\z/', Settings::get_pos_application_id() ) || '' === Settings::get_location_id() ) {
+			return __( 'Add a valid Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' );
 		}
 		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
 			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
@@ -927,7 +928,7 @@ class Gateway extends \WC_Payment_Gateway {
 		$connected         = '' !== Settings::get_access_token();
 		$location_selected = '' !== Settings::get_location_id();
 		$application_id    = Settings::get_pos_application_id();
-		$application_ready = 1 === preg_match( '/^sq0idp-[\w-]{8,}$/', $application_id );
+		$application_ready = 1 === preg_match( '/^sq0idp-[A-Za-z0-9_-]{22}\z/', $application_id );
 		$is_sandbox        = 'sandbox' === Settings::get_environment();
 
 		ob_start();
