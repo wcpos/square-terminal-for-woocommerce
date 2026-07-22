@@ -80,7 +80,7 @@ final class Settings {
 		$connection  = SquareOAuth::connection();
 
 		if (
-			$environment === ( $connection['environment'] ?? '' )
+			( $connection['environment'] ?? '' ) === $environment
 			&& '' !== (string) ( $connection['access_token'] ?? '' )
 		) {
 			return (string) $connection['access_token'];
