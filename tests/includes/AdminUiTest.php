@@ -12,6 +12,7 @@ final class AdminUiTest extends TestCase {
 		$GLOBALS['sqtwc_enqueued_scripts']                      = array();
 		$GLOBALS['sqtwc_localized_scripts']                     = array();
 		$_GET                                                   = array();
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 	}
 
@@ -40,6 +41,7 @@ final class AdminUiTest extends TestCase {
 
 	public function test_pairing_row_does_not_duplicate_the_webhook_url_field(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'webhook_notification_url' => 'https://example.test/wp-json/sqtwc/v1/webhook' );
+		Gateway::reset_device_memo();
 		Settings::reset_cache_for_tests();
 
 		$html = Gateway::render_admin_fields();

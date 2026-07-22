@@ -32,6 +32,13 @@ class Gateway extends \WC_Payment_Gateway {
 	private const LAST_KNOWN_GOOD_TTL = 86400;
 
 	/**
+	 * Per-request device lists, keyed by environment and location.
+	 *
+	 * @var array<string,array<int,array<string,string>>>
+	 */
+	private static array $device_memo = array();
+
+	/**
 	 * Gateway constructor.
 	 */
 	public function __construct() {
@@ -79,10 +86,10 @@ class Gateway extends \WC_Payment_Gateway {
 					'settingsOk'   => __( 'Square credentials and location verified.', 'square-terminal-for-woocommerce' ),
 					'requestError' => __( 'The request could not be completed.', 'square-terminal-for-woocommerce' ),
 					'pairedTitle'  => __( 'Paired with this plugin — selectable at checkout', 'square-terminal-for-woocommerce' ),
-					'accountTitle' => __( 'Other Terminals on this Square account', 'square-terminal-for-woocommerce' ),
+					'accountTitle' => __( 'Other Terminal API devices at this location', 'square-terminal-for-woocommerce' ),
 					'nonePaired'   => __( 'No Terminals are paired with this plugin yet. Use Create Device Code to pair one.', 'square-terminal-for-woocommerce' ),
-					'noneAtAll'    => __( 'Square reports no Terminals at this location.', 'square-terminal-for-woocommerce' ),
-					'accountNote'  => __( 'These are visible to Square but were paired elsewhere, so they cannot be selected at checkout until paired with this plugin.', 'square-terminal-for-woocommerce' ),
+					'noneAtAll'    => __( 'Square reports no Terminal API devices here. A Terminal running Square POS is invisible to this API until it has been paired with a device code, so an empty list is expected before pairing.', 'square-terminal-for-woocommerce' ),
+					'accountNote'  => __( 'Square only reports Terminals that have been set up for Terminal API use. These were set up by another application, so they cannot be selected at checkout until paired with this plugin.', 'square-terminal-for-woocommerce' ),
 					/* translators: 1: number of Terminals paired with this plugin, 2: number of other Terminals on the account. */
 					'readersFound' => __( 'Found %1$d paired and %2$d other Terminal(s).', 'square-terminal-for-woocommerce' ),
 				),
@@ -229,6 +236,33 @@ class Gateway extends \WC_Payment_Gateway {
 	 * @return array<int,array<string,string>>
 	 */
 	public static function get_available_devices( string $environment ): array {
+		// WooCommerce builds the localized payment data more than once per page
+		// render, which repeated both the transient reads and the log lines.
+		$memo_key = $environment . '|' . Settings::get_location_id();
+		if ( array_key_exists( $memo_key, self::$device_memo ) ) {
+			return self::$device_memo[ $memo_key ];
+		}
+
+		$devices                        = self::resolve_available_devices( $environment );
+		self::$device_memo[ $memo_key ] = $devices;
+
+		return $devices;
+	}
+
+	/**
+	 * Reset the per-request device memo.
+	 */
+	public static function reset_device_memo(): void {
+		self::$device_memo = array();
+	}
+
+	/**
+	 * Resolve the selectable device list for an environment.
+	 *
+	 * @param string $environment Active Square environment.
+	 * @return array<int,array<string,string>>
+	 */
+	private static function resolve_available_devices( string $environment ): array {
 		if ( 'sandbox' === $environment ) {
 			return array(
 				array(
@@ -331,6 +365,10 @@ class Gateway extends \WC_Payment_Gateway {
 	 * @param string $location_id Square location ID.
 	 */
 	public static function delete_device_cache( string $environment, string $location_id ): void {
+		// The per-request memo must not outlive an invalidation, or a lookup made
+		// straight after pairing would still answer from the pre-pairing list.
+		self::reset_device_memo();
+
 		$cache_key = self::get_device_cache_key( $environment, $location_id );
 		delete_transient( $cache_key );
 		delete_transient( $cache_key . '_last_known_good' );
@@ -668,7 +706,7 @@ class Gateway extends \WC_Payment_Gateway {
 			esc_html__( 'Check for readers', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Create Device Code', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Validate Settings', 'square-terminal-for-woocommerce' ),
-			esc_html__( 'Check for readers lists the Terminals Square knows about. Create Device Code returns a code to enter on the Terminal. Validate Settings checks the credentials and location above against Square.', 'square-terminal-for-woocommerce' )
+			esc_html__( 'Square can only see a Terminal once it has been paired with a device code — a Terminal running Square POS is invisible to the API until then. Create Device Code returns a code to enter on the Terminal; Check for readers lists what Square can see; Validate Settings checks the credentials and location above.', 'square-terminal-for-woocommerce' )
 		);
 	}
 
