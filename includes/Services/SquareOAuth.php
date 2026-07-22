@@ -197,7 +197,7 @@ final class SquareOAuth {
 				'verifier'    => $verifier,
 				'state'       => $state,
 				'environment' => $environment,
-				'generation'  => (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ),
+				'generation'  => self::current_generation(),
 			),
 			self::PENDING_TTL
 		);
@@ -217,7 +217,7 @@ final class SquareOAuth {
 		if ( ! is_array( $pending ) || '' === (string) ( $pending['verifier'] ?? '' ) ) {
 			throw new RuntimeException( 'This connection attempt expired. Start again.' );
 		}
-		if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
+		if ( (string) ( $pending['generation'] ?? '' ) !== self::current_generation() ) {
 			throw new RuntimeException( 'This connection attempt expired. Start again.' );
 		}
 
@@ -245,7 +245,7 @@ final class SquareOAuth {
 		$transition = $this->connection_transition;
 		$transition(
 			function () use ( $pending, $response, $environment ): void {
-				if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
+				if ( (string) ( $pending['generation'] ?? '' ) !== self::current_generation() ) {
 					throw new RuntimeException( 'This connection attempt expired. Start again.' );
 				}
 				$this->store( $response, $environment );
@@ -375,6 +375,24 @@ final class SquareOAuth {
 				'expires_at'  => $expires_at,
 			)
 		);
+	}
+
+	/**
+	 * Read the attempt generation, bypassing the request-local options cache.
+	 *
+	 * The generation exists so an authorization started before a disconnect
+	 * cannot complete after it. A plain get_option() is served from the cache
+	 * populated earlier in the same request, so a disconnect happening while the
+	 * token exchange is in flight would go unseen and the connection would be
+	 * recreated moments after the administrator removed it.
+	 */
+	private static function current_generation(): string {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( self::ATTEMPT_GENERATION_OPTION, 'options' );
+			wp_cache_delete( 'alloptions', 'options' );
+		}
+
+		return (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' );
 	}
 
 	/**
