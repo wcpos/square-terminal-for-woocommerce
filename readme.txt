@@ -12,4 +12,4 @@ Collect WooCommerce order payments on Square Terminal devices.
 
 == Collection methods ==
 
-Choose Square Terminal for paired Terminal API hardware, or Square Point of Sale app handoff to open the Square POS app on a supported phone or tablet with a connected Square Reader. POS app handoff accepts card tenders only and requires Square's production environment.
+Choose Square Terminal for paired hardware or Square Reader for mobile handoff through the Square Point of Sale app. The plugin includes a guided setup checklist for Reader handoff, which accepts card tenders and requires Square's production environment.

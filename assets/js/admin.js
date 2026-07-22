@@ -233,8 +233,70 @@
 		});
 	}
 
+	/** Settings rows grouped by the device that uses them. */
+	var modeRows = {
+		terminal: ['section_terminal', 'terminal_pairing', 'webhook_status', 'collect_signature'],
+		pos_app: ['pos_application_id']
+	};
+
+	function trackDeviceMode() {
+		var radios = document.querySelectorAll('input[name="woocommerce_sqtwc_collection_method"]');
+
+		function sync() {
+			var selected = 'terminal';
+			var mode;
+			var i;
+
+			for (i = 0; i < radios.length; i++) {
+				if (radios[i].checked) { selected = radios[i].value; }
+			}
+			for (mode in modeRows) {
+				if (Object.prototype.hasOwnProperty.call(modeRows, mode)) {
+					for (i = 0; i < modeRows[mode].length; i++) {
+						var field = document.getElementById('woocommerce_sqtwc_' + modeRows[mode][i]);
+						var row = field ? field.closest('tr') : null;
+						if (field) { (row || field).style.display = mode === selected ? '' : 'none'; }
+						if (field && !row && field.nextElementSibling && field.nextElementSibling.tagName === 'P') {
+							field.nextElementSibling.style.display = mode === selected ? '' : 'none';
+						}
+					}
+				}
+			}
+		}
+
+		for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
+		sync();
+	}
+
+	function validateApplicationId() {
+		var input = document.getElementById('woocommerce_sqtwc_pos_application_id');
+		var status = document.getElementById('sqtwc-pos-application-status');
+		if (!input || !status) { return; }
+
+		function sync() {
+			var value = input.value.trim();
+			status.className = 'sqtwc-setup__input-status';
+			if (!value) { status.textContent = ''; return; }
+			if (value.indexOf('sq0idp-') === 0) {
+				status.textContent = strings.applicationIdValid || '✓ That looks right';
+				status.className += ' sqtwc-setup__input-status--ok';
+			} else if (value.indexOf('sandbox-') === 0) {
+				status.textContent = strings.applicationIdSandbox || 'That\'s the test ID — you need the one starting with sq0idp-';
+				status.className += ' sqtwc-setup__input-status--warning';
+			} else {
+				status.textContent = strings.applicationIdInvalid || 'Application IDs start with sq0idp-';
+				status.className += ' sqtwc-setup__input-status--muted';
+			}
+		}
+
+		input.addEventListener('input', sync);
+		sync();
+	}
+
 	function init() {
 		trackEnvironment();
+		trackDeviceMode();
+		validateApplicationId();
 		bindCopyWebhook();
 		bind('sqtwc-check-readers', 'sqtwc_list_devices', renderReaders);
 		bind('sqtwc-create-device-code', 'sqtwc_create_device_code', function (body) {

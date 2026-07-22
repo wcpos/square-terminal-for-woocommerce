@@ -102,6 +102,9 @@ class Gateway extends \WC_Payment_Gateway {
 					'accountNote'  => __( 'Square only reports Terminals that have been set up for Terminal API use. These were set up by another application, so they cannot be selected at checkout until paired with this plugin.', 'square-terminal-for-woocommerce' ),
 					/* translators: 1: number of Terminals paired with this plugin, 2: number of other Terminals on the account. */
 					'readersFound' => __( 'Found %1$d paired and %2$d other Terminal(s).', 'square-terminal-for-woocommerce' ),
+					'applicationIdValid'   => __( '✓ That looks right', 'square-terminal-for-woocommerce' ),
+					'applicationIdSandbox' => __( 'That\'s the test ID — you need the one starting with sq0idp-', 'square-terminal-for-woocommerce' ),
+					'applicationIdInvalid' => __( 'Application IDs start with sq0idp-', 'square-terminal-for-woocommerce' ),
 				),
 			)
 		);
@@ -538,13 +541,11 @@ class Gateway extends \WC_Payment_Gateway {
 				'title'       => __( 'Environment', 'square-terminal-for-woocommerce' ),
 				'type'        => 'select',
 				'options'     => array(
-					'sandbox'    => __( 'Sandbox', 'square-terminal-for-woocommerce' ),
-					'production' => __( 'Production', 'square-terminal-for-woocommerce' ),
+					'sandbox'    => __( 'Test mode (sandbox)', 'square-terminal-for-woocommerce' ),
+					'production' => __( 'Live', 'square-terminal-for-woocommerce' ),
 				),
 				'default'     => '' !== $hints['environment'] ? $hints['environment'] : 'sandbox',
-				// Chosen before connecting: a connection authorizes one environment
-				// and can never be used against the other.
-				'description' => '' !== $hints['environment'] ? self::hint_description() : __( 'Choose before connecting. A connection covers one environment only.', 'square-terminal-for-woocommerce' ),
+				'description' => '' !== $hints['environment'] ? self::hint_description() : __( 'Test mode uses Square\'s sandbox. The Square Reader handoff only works in Live.', 'square-terminal-for-woocommerce' ),
 			),
 			'square_connection'        => array(
 				'title' => __( 'Square connection', 'square-terminal-for-woocommerce' ),
@@ -557,23 +558,13 @@ class Gateway extends \WC_Payment_Gateway {
 				'description' => '' !== $hints['location_id'] ? self::hint_description() : __( 'The Square location this Terminal takes payments for.', 'square-terminal-for-woocommerce' ),
 			),
 			'collection_method'        => array(
-				'title'       => __( 'Collection method', 'square-terminal-for-woocommerce' ),
-				'type'        => 'select',
-				'default'     => 'terminal',
-				'options'     => array(
-					'terminal' => __( 'Square Terminal (Terminal API)', 'square-terminal-for-woocommerce' ),
-					'pos_app'  => __( 'Square Point of Sale app (mobile handoff)', 'square-terminal-for-woocommerce' ),
-				),
-				'description' => __( 'Square Terminal uses a paired Square Terminal device. The Square Point of Sale app handoff opens the Square POS app on this device to take payment with a connected Square Reader — open the payment page on the phone or tablet that has the Square app installed.', 'square-terminal-for-woocommerce' ),
+				'title'   => __( 'Which Square device do you use?', 'square-terminal-for-woocommerce' ),
+				'type'    => 'device_chooser',
+				'default' => 'terminal',
 			),
 			'pos_application_id'       => array(
-				'title'       => __( 'Square application ID', 'square-terminal-for-woocommerce' ),
-				'type'        => 'text',
-				'description' => __( 'Create an app in Square Developer Console. Copy its production Application ID (starts with sq0idp-), then register the URL below at Point of Sale API → Web callback URL.', 'square-terminal-for-woocommerce' ),
-			),
-			'pos_callback_url'         => array(
-				'title' => __( 'Web callback URL', 'square-terminal-for-woocommerce' ),
-				'type'  => 'pos_callback_url',
+				'title' => __( 'Set up your Square Reader', 'square-terminal-for-woocommerce' ),
+				'type'  => 'pos_setup_checklist',
 			),
 
 			'section_terminal'         => array(
@@ -892,6 +883,100 @@ class Gateway extends \WC_Payment_Gateway {
 		);
 	}
 
+	/** Render the device choice as two radio cards. */
+	public function generate_device_chooser_html( $key, $data ): string {
+		unset( $key, $data );
+		$selected = Settings::get_collection_method();
+
+		return sprintf(
+			'<tr valign="top"><td colspan="2" class="forminp"><fieldset class="sqtwc-device-chooser">'
+			. '<legend>%1$s</legend><p class="sqtwc-device-chooser__intro">%2$s</p><div class="sqtwc-device-chooser__cards">'
+			. '<label class="sqtwc-device-card"><input class="sqtwc-device-card__input" type="radio" name="woocommerce_sqtwc_collection_method" value="terminal"%3$s />'
+			. '<span class="sqtwc-device-card__body"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="15" y="5" width="34" height="54" rx="6" /><rect x="20" y="12" width="24" height="29" rx="2" /><path d="M24 50h16" /></svg><span><strong>%4$s</strong><span>%5$s</span></span></span></label>'
+			. '<label class="sqtwc-device-card"><input class="sqtwc-device-card__input" type="radio" name="woocommerce_sqtwc_collection_method" value="pos_app"%6$s />'
+			. '<span class="sqtwc-device-card__body"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="18" y="8" width="28" height="48" rx="7" /><path d="M27 23c3-3 7-3 10 0M24 19c5-5 11-5 16 0" /></svg><span><strong>%7$s</strong><span>%8$s</span></span></span></label>'
+			. '</div></fieldset></td></tr>',
+			esc_html__( 'Which Square device do you use?', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'This decides how your checkout talks to Square. You can change it at any time.', 'square-terminal-for-woocommerce' ),
+			'terminal' === $selected ? ' checked' : '',
+			esc_html__( 'Square Terminal', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'The all-in-one device with its own screen and receipt printer. Pairs over Wi-Fi.', 'square-terminal-for-woocommerce' ),
+			'pos_app' === $selected ? ' checked' : '',
+			esc_html__( 'Square Reader', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'The small tap-and-chip reader that works with the free Square app on a phone or tablet.', 'square-terminal-for-woocommerce' )
+		);
+	}
+
+	/** Keep the collection method inside its two supported values. */
+	public function validate_collection_method_field( $key, $value ): string {
+		unset( $key );
+
+		return 'pos_app' === $value ? 'pos_app' : 'terminal';
+	}
+
+	/** Trim common copy-and-paste noise without rejecting an application ID. */
+	public function validate_pos_application_id_field( $key, $value ): string {
+		unset( $key );
+
+		return trim( trim( (string) wp_unslash( $value ) ), "\"'" );
+	}
+
+	/** Render the five-step Square Reader setup checklist. */
+	public function generate_pos_setup_checklist_html( $key, $data ): string {
+		unset( $key, $data );
+		$connected         = '' !== Settings::get_access_token();
+		$location_selected = '' !== Settings::get_location_id();
+		$application_id    = Settings::get_pos_application_id();
+		$application_ready = 1 === preg_match( '/^sq0idp-/', $application_id );
+		$is_sandbox        = 'sandbox' === Settings::get_environment() && 'pos_app' === Settings::get_collection_method();
+
+		ob_start();
+		?>
+		<tr valign="top"><td colspan="2" class="forminp"><section class="sqtwc-setup">
+			<h2><?php echo esc_html__( 'Set up your Square Reader', 'square-terminal-for-woocommerce' ); ?></h2>
+			<p class="sqtwc-setup__intro"><?php echo esc_html__( 'Five steps, about ten minutes, and you only ever do this once. Do steps 3 and 4 on this computer with your phone nearby.', 'square-terminal-for-woocommerce' ); ?></p>
+			<?php if ( $is_sandbox ) : ?>
+				<div class="sqtwc-setup__notice"><strong><?php echo esc_html__( 'Test mode is on.', 'square-terminal-for-woocommerce' ); ?></strong> <?php echo esc_html__( 'Square doesn\'t offer a test mode for Reader payments — switch Environment to Live to use the Reader. Your checklist progress is kept.', 'square-terminal-for-woocommerce' ); ?></div>
+			<?php endif; ?>
+			<ol class="sqtwc-setup__steps">
+				<li class="sqtwc-setup__step<?php echo esc_attr( $connected ? ' sqtwc-setup__step--done' : '' ); ?>" data-step="1"><span class="sqtwc-setup__number">1</span><div>
+					<header><strong><?php echo esc_html__( 'Connect your Square account', 'square-terminal-for-woocommerce' ); ?></strong><span class="sqtwc-setup__chip<?php echo esc_attr( $connected ? ' sqtwc-setup__chip--done' : '' ); ?>"><?php echo esc_html( $connected ? __( 'Done', 'square-terminal-for-woocommerce' ) : __( 'To do', 'square-terminal-for-woocommerce' ) ); ?></span></header>
+					<?php if ( $connected ) : ?>
+						<p><span class="sqtwc-setup__connected"><?php echo esc_html__( '✓ Connected', 'square-terminal-for-woocommerce' ); ?></span> <a href="#woocommerce_sqtwc_square_connection"><?php echo esc_html__( 'Change', 'square-terminal-for-woocommerce' ); ?></a></p>
+					<?php else : ?>
+						<p><?php echo esc_html__( 'Use the Connect button above, then come back to this list.', 'square-terminal-for-woocommerce' ); ?> <a href="#woocommerce_sqtwc_square_connection"><?php echo esc_html__( 'Change', 'square-terminal-for-woocommerce' ); ?></a></p>
+					<?php endif; ?>
+				</div></li>
+				<li class="sqtwc-setup__step<?php echo esc_attr( $location_selected ? ' sqtwc-setup__step--done' : '' ); ?>" data-step="2"><span class="sqtwc-setup__number">2</span><div>
+					<header><strong><?php echo esc_html__( 'Choose your location', 'square-terminal-for-woocommerce' ); ?></strong><span class="sqtwc-setup__chip<?php echo esc_attr( $location_selected ? ' sqtwc-setup__chip--done' : '' ); ?>"><?php echo esc_html( $location_selected ? __( 'Done', 'square-terminal-for-woocommerce' ) : __( 'To do', 'square-terminal-for-woocommerce' ) ); ?></span></header>
+					<p><?php echo esc_html__( 'Payments are checked against this location, so pick the one your Reader will be used at.', 'square-terminal-for-woocommerce' ); ?> <a href="#woocommerce_sqtwc_location_id"><?php echo esc_html__( 'Change', 'square-terminal-for-woocommerce' ); ?></a></p>
+				</div></li>
+				<li class="sqtwc-setup__step<?php echo esc_attr( $application_ready ? ' sqtwc-setup__step--done' : '' ); ?>" data-step="3"><span class="sqtwc-setup__number">3</span><div>
+					<header><strong><?php echo esc_html__( 'Register your store with Square', 'square-terminal-for-woocommerce' ); ?></strong><span class="sqtwc-setup__chip<?php echo esc_attr( $application_ready ? ' sqtwc-setup__chip--done' : '' ); ?>"><?php echo esc_html( $application_ready ? __( 'Done', 'square-terminal-for-woocommerce' ) : __( 'To do', 'square-terminal-for-woocommerce' ) ); ?></span><?php if ( ! $application_ready ) : ?>
+						<span class="sqtwc-setup__chip"><?php echo esc_html__( '~ 2 min', 'square-terminal-for-woocommerce' ); ?></span><?php endif; ?></header>
+					<p><?php echo esc_html__( 'Square asks every store to register once on its developer site, so the Square app on your phone knows it\'s your store talking to it. It\'s free — ignore the technical look of the site, you only need one thing from it.', 'square-terminal-for-woocommerce' ); ?></p>
+					<ol><li><?php echo esc_html__( 'Open Square\'s developer site and sign in with your normal Square login.', 'square-terminal-for-woocommerce' ); ?></li><li><?php echo esc_html__( 'Click + (Add an application), type any name — "My Store" is fine — and save.', 'square-terminal-for-woocommerce' ); ?></li><li><?php echo esc_html__( 'On the page that opens, find Production Application ID and press Copy.', 'square-terminal-for-woocommerce' ); ?></li></ol>
+					<p><a class="button" href="https://developer.squareup.com/apps" target="_blank" rel="noopener"><?php echo esc_html__( 'Open Square\'s developer site ↗', 'square-terminal-for-woocommerce' ); ?></a></p>
+					<label for="woocommerce_sqtwc_pos_application_id"><?php echo esc_html__( 'Paste your Application ID', 'square-terminal-for-woocommerce' ); ?></label><input type="text" id="woocommerce_sqtwc_pos_application_id" name="woocommerce_sqtwc_pos_application_id" value="<?php echo esc_attr( $application_id ); ?>" placeholder="<?php echo esc_attr__( 'sq0idp-…', 'square-terminal-for-woocommerce' ); ?>" /><span id="sqtwc-pos-application-status" class="sqtwc-setup__input-status" aria-live="polite"></span>
+					<p class="description"><?php echo esc_html__( 'Application IDs start with sq0idp-. If yours starts with sandbox-, you\'ve copied the test one — scroll up on Square\'s page for the Production ID.', 'square-terminal-for-woocommerce' ); ?></p>
+				</div></li>
+				<li class="sqtwc-setup__step" data-step="4"><span class="sqtwc-setup__number">4</span><div>
+					<header><strong><?php echo esc_html__( 'Give Square your store\'s return address', 'square-terminal-for-woocommerce' ); ?></strong><span class="sqtwc-setup__chip"><?php echo esc_html__( '~ 1 min', 'square-terminal-for-woocommerce' ); ?></span></header>
+					<p><?php echo esc_html__( 'After each payment, the Square app sends the customer\'s browser back to your checkout. Square only does this for an address it has on file.', 'square-terminal-for-woocommerce' ); ?></p>
+					<div class="sqtwc-webhook-copy"><input type="text" id="sqtwc-pos-callback-url" class="sqtwc-webhook-url" value="<?php echo esc_attr( Settings::get_pos_callback_url() ); ?>" readonly onfocus="this.select()" /><button type="button" class="button" id="sqtwc-copy-pos-callback" data-copied="<?php echo esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ); ?>" data-failed="<?php echo esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ); ?>"><?php echo esc_html__( 'Copy address', 'square-terminal-for-woocommerce' ); ?></button></div>
+					<ol><li><?php echo esc_html__( 'Back on Square\'s developer site, click Point of Sale API in the left menu.', 'square-terminal-for-woocommerce' ); ?></li><li><?php echo esc_html__( 'Scroll to the Web section, paste the address into Web callback URL, and press Save.', 'square-terminal-for-woocommerce' ); ?></li></ol>
+				</div></li>
+				<li class="sqtwc-setup__step" data-step="5"><span class="sqtwc-setup__number">5</span><div>
+					<header><strong><?php echo esc_html__( 'Set up the phone or tablet you\'ll take payments on', 'square-terminal-for-woocommerce' ); ?></strong></header>
+					<ol><li><?php echo esc_html__( 'Install the free Square Point of Sale app from the App Store or Google Play.', 'square-terminal-for-woocommerce' ); ?></li><li><?php echo esc_html__( 'Sign in with the same Square account as step 1.', 'square-terminal-for-woocommerce' ); ?></li><li><?php echo esc_html__( 'In the app, go to ≡ More → Settings → Hardware and pair your Reader.', 'square-terminal-for-woocommerce' ); ?></li></ol>
+					<p><?php echo esc_html__( 'When you\'re ready to charge a customer, open the order\'s payment page on that phone — a button hands over to the Square app, and your Reader takes the tap or chip payment.', 'square-terminal-for-woocommerce' ); ?></p>
+				</div></li>
+			</ol>
+		</section></td></tr>
+		<?php
+		return (string) ob_get_clean();
+	}
+
 	/**
 	 * Render the pairing controls as a WooCommerce settings row.
 	 *
@@ -906,46 +991,9 @@ class Gateway extends \WC_Payment_Gateway {
 		unset( $key );
 
 		return sprintf(
-			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			'<tr id="woocommerce_sqtwc_webhook_status" valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
 			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
 			self::render_webhook_status()
-		);
-	}
-
-	/**
-	 * Render the POS app callback URL settings row.
-	 *
-	 * @param string              $key  Field key.
-	 * @param array<string,mixed> $data Field definition.
-	 */
-	public function generate_pos_callback_url_html( $key, $data ): string {
-		unset( $key );
-
-		return sprintf(
-			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
-			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
-			self::render_pos_callback_url()
-		);
-	}
-
-	/** Render the read-only callback URL and environment warning. */
-	public static function render_pos_callback_url(): string {
-		$warning = '';
-		if ( 'pos_app' === Settings::get_collection_method() && 'production' !== Settings::get_environment() ) {
-			$warning = sprintf(
-				'<p class="description"><strong>%s</strong></p>',
-				esc_html__( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' )
-			);
-		}
-
-		return sprintf(
-			'<div class="sqtwc-webhook-copy"><input type="text" id="sqtwc-pos-callback-url" class="sqtwc-webhook-url" value="%1$s" readonly onfocus="this.select()" />'
-			. '<button type="button" class="button" id="sqtwc-copy-pos-callback" data-copied="%2$s" data-failed="%3$s">%4$s</button></div>%5$s',
-			esc_attr( Settings::get_pos_callback_url() ),
-			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
-			esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ),
-			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),
-			$warning
 		);
 	}
 
@@ -1044,7 +1092,7 @@ class Gateway extends \WC_Payment_Gateway {
 		}
 
 		return sprintf(
-			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			'<tr id="woocommerce_sqtwc_square_connection" valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
 			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
 			self::render_connection_controls()
 		);
@@ -1131,7 +1179,7 @@ class Gateway extends \WC_Payment_Gateway {
 		$title = isset( $data['title'] ) ? (string) $data['title'] : '';
 
 		return sprintf(
-			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			'<tr id="woocommerce_sqtwc_terminal_pairing" valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
 			esc_html( $title ),
 			self::render_admin_fields()
 		);
