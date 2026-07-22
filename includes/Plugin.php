@@ -478,10 +478,17 @@ final class Plugin {
 
 		$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
 		$location_id  = sanitize_text_field( (string) ( $request['location_id'] ?? '' ) );
+		if ( '' === $access_token ) {
+			$access_token = (string) Settings::get( $environment . '_access_token', '' );
+		}
+		$connection = SquareOAuth::connection();
+		if ( '' === $access_token && ( $connection['environment'] ?? '' ) === $environment ) {
+			$access_token = (string) ( $connection['access_token'] ?? '' );
+		}
 
 		return array(
 			'environment'  => $environment,
-			'access_token' => '' !== $access_token ? $access_token : (string) Settings::get( $environment . '_access_token', '' ),
+			'access_token' => $access_token,
 			'location_id'  => '' !== $location_id ? $location_id : Settings::get_location_id(),
 		);
 	}

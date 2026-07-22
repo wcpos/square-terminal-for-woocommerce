@@ -1,10 +1,39 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\ObtainTokenResponse;
+
+final class OAuthTestClientFactory {
+	public static ?object $response = null;
+	public static ?RuntimeException $exception = null;
+	public static array $requests = array();
+	public static array $environments = array();
+
+	public function create( ?string $access_token = null, ?string $environment = null ): object {
+		unset( $access_token );
+		self::$environments[] = $environment;
+
+		return (object) array( 'oAuth' => new OAuthTestApi() );
+	}
+}
+
+final class OAuthTestApi {
+	public function obtainToken( object $request ): object {
+		OAuthTestClientFactory::$requests[] = $request;
+		if ( OAuthTestClientFactory::$exception ) {
+			throw OAuthTestClientFactory::$exception;
+		}
+
+		return OAuthTestClientFactory::$response;
+	}
+}
 
 final class SquareOAuthTest extends TestCase {
 	protected function setUp(): void {
@@ -105,7 +134,7 @@ final class SquareOAuthTest extends TestCase {
 
 	public function test_a_mismatched_state_is_refused_and_the_code_is_never_exchanged(): void {
 		set_transient(
-			'sqtwc_oauth_pending',
+			'sqtwc_oauth_pending_' . hash( 'sha256', 'attacker-state' ),
 			array(
 				'verifier'    => 'verifier',
 				'state'       => 'expected-state',
@@ -115,8 +144,50 @@ final class SquareOAuthTest extends TestCase {
 		);
 
 		$this->expectException( RuntimeException::class );
+		$this->expectExceptionMessage( 'The connection response did not match this site.' );
 
 		( new SquareOAuth() )->complete( 'code', 'attacker-state' );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_concurrent_attempts_preserve_the_first_callback_and_store_its_connection(): void {
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+			array(
+				'accessToken'           => 'access-one',
+				'tokenType'             => 'bearer',
+				'expiresAt'             => '2030-01-02T03:04:05Z',
+				'merchantId'            => 'merchant-one',
+				'subscriptionId'        => null,
+				'planId'                => null,
+				'idToken'               => null,
+				'refreshToken'          => 'refresh-one',
+				'shortLived'            => false,
+				'errors'                => null,
+				'refreshTokenExpiresAt' => '2030-04-02T03:04:05Z',
+			)
+		);
+		$oauth                           = new SquareOAuth( new OAuthTestClientFactory() );
+		$GLOBALS['sqtwc_remote_post_response'] = array(
+			'body' => wp_json_encode( array( 'authorize_url' => 'https://square.test/one', 'state' => 'state-one' ) ),
+		);
+		$oauth->begin( 'https://store.test/callback', 'sandbox' );
+		$GLOBALS['sqtwc_remote_post_response'] = array(
+			'body' => wp_json_encode( array( 'authorize_url' => 'https://square.test/two', 'state' => 'state-two' ) ),
+		);
+		$oauth->begin( 'https://store.test/callback', 'production' );
+
+		$oauth->complete( 'authorization-code', 'state-one' );
+
+		$connection = SquareOAuth::connection();
+		self::assertSame( 'access-one', $connection['access_token'] );
+		self::assertSame( 'refresh-one', $connection['refresh_token'] );
+		self::assertSame( strtotime( '2030-01-02T03:04:05Z' ), $connection['expires_at'] );
+		self::assertSame( 'merchant-one', $connection['merchant_id'] );
+		self::assertSame( 'sandbox', $connection['environment'] );
+		self::assertFalse( get_transient( 'sqtwc_oauth_pending_' . hash( 'sha256', 'state-one' ) ) );
+		self::assertIsArray( get_transient( 'sqtwc_oauth_pending_' . hash( 'sha256', 'state-two' ) ) );
 	}
 
 	public function test_disconnect_clears_the_connection_and_any_pending_attempt(): void {
@@ -133,6 +204,102 @@ final class SquareOAuthTest extends TestCase {
 		$this->expectException( RuntimeException::class );
 
 		( new SquareOAuth() )->refresh();
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_refresh_marks_the_connection_for_reconnection_before_the_request(): void {
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$exception = new RuntimeException( 'response lost' );
+		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ] = array(
+			'access_token'  => 'old-access',
+			'refresh_token' => 'single-use-refresh',
+			'environment'   => 'production',
+		);
+
+		try {
+			( new SquareOAuth( new OAuthTestClientFactory() ) )->refresh();
+			self::fail( 'Expected the refresh request to fail.' );
+		} catch ( RuntimeException $exception ) {
+			self::assertSame( 'response lost', $exception->getMessage() );
+		}
+
+		$connection = SquareOAuth::connection();
+		self::assertSame( '', $connection['access_token'] );
+		self::assertSame( '', $connection['refresh_token'] );
+		self::assertTrue( $connection['reconnect_required'] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_refresh_rejects_a_blank_rotated_refresh_token(): void {
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+			array(
+				'accessToken'           => 'new-access',
+				'tokenType'             => 'bearer',
+				'expiresAt'             => '2030-01-02T03:04:05Z',
+				'merchantId'            => 'merchant',
+				'subscriptionId'        => null,
+				'planId'                => null,
+				'idToken'               => null,
+				'refreshToken'          => '',
+				'shortLived'            => false,
+				'errors'                => null,
+				'refreshTokenExpiresAt' => null,
+			)
+		);
+		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ] = array(
+			'access_token'  => 'old-access',
+			'refresh_token' => 'single-use-refresh',
+			'environment'   => 'sandbox',
+		);
+
+		$exception = null;
+		try {
+			( new SquareOAuth( new OAuthTestClientFactory() ) )->refresh();
+		} catch ( RuntimeException $caught ) {
+			$exception = $caught;
+		}
+
+		self::assertInstanceOf( RuntimeException::class, $exception );
+		self::assertSame( 'Square returned no refresh token.', $exception->getMessage() );
+		self::assertTrue( SquareOAuth::connection()['reconnect_required'] );
+	}
+
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_refresh_uses_the_client_id_for_the_connection_environment(): void {
+		define( 'SQTWC_SQUARE_SANDBOX_CLIENT_ID', 'sandbox-client-id' );
+		define( 'SQTWC_SQUARE_PRODUCTION_CLIENT_ID', 'production-client-id' );
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$response = new ObtainTokenResponse(
+			array(
+				'accessToken'           => 'rotated-access',
+				'tokenType'             => 'bearer',
+				'expiresAt'             => '2030-01-02T03:04:05Z',
+				'merchantId'            => 'merchant',
+				'subscriptionId'        => null,
+				'planId'                => null,
+				'idToken'               => null,
+				'refreshToken'          => 'rotated-refresh',
+				'shortLived'            => false,
+				'errors'                => null,
+				'refreshTokenExpiresAt' => '2030-04-02T03:04:05Z',
+			)
+		);
+		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ] = array(
+			'access_token'  => 'old-access',
+			'refresh_token' => 'single-use-refresh',
+			'environment'   => 'sandbox',
+		);
+
+		( new SquareOAuth( new OAuthTestClientFactory() ) )->refresh();
+
+		self::assertSame( 'sandbox-client-id', OAuthTestClientFactory::$requests[0]->getClientId() );
+		self::assertSame( array( 'sandbox' ), OAuthTestClientFactory::$environments );
+		self::assertSame( 'rotated-access', SquareOAuth::connection()['access_token'] );
+		self::assertSame( 'rotated-refresh', SquareOAuth::connection()['refresh_token'] );
 	}
 
 	public function test_an_oauth_token_is_used_when_the_environment_matches(): void {

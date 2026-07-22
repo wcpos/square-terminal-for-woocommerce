@@ -9,6 +9,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use RuntimeException;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
+use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\OAuth\Requests\ObtainTokenRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\SquareClient;
 
@@ -166,7 +167,7 @@ final class SquareOAuth {
 		// is unusable, so the forwarding endpoint cannot exchange it even though
 		// the code passes through.
 		set_transient(
-			self::PENDING_TRANSIENT,
+			self::PENDING_TRANSIENT . '_' . hash( 'sha256', $state ),
 			array(
 				'verifier'    => $verifier,
 				'state'       => $state,
@@ -186,7 +187,7 @@ final class SquareOAuth {
 	 * @throws RuntimeException When the attempt cannot be completed.
 	 */
 	public function complete( string $code, string $state ): void {
-		$pending = get_transient( self::PENDING_TRANSIENT );
+		$pending = get_transient( self::PENDING_TRANSIENT . '_' . hash( 'sha256', $state ) );
 		if ( ! is_array( $pending ) || '' === (string) ( $pending['verifier'] ?? '' ) ) {
 			throw new RuntimeException( 'This connection attempt expired. Start again.' );
 		}
@@ -195,7 +196,7 @@ final class SquareOAuth {
 			throw new RuntimeException( 'The connection response did not match this site.' );
 		}
 
-		delete_transient( self::PENDING_TRANSIENT );
+		delete_transient( self::PENDING_TRANSIENT . '_' . hash( 'sha256', $state ) );
 
 		$environment = (string) ( $pending['environment'] ?? 'production' );
 		$client      = $this->clients->create( '', $environment );
@@ -204,7 +205,7 @@ final class SquareOAuth {
 		$response = $client->oAuth->obtainToken(
 			new ObtainTokenRequest(
 				array(
-					'clientId'     => self::client_id(),
+					'clientId'     => self::client_id( $environment ),
 					'grantType'    => 'authorization_code',
 					'code'         => $code,
 					'codeVerifier' => (string) $pending['verifier'],
@@ -229,12 +230,16 @@ final class SquareOAuth {
 
 		$environment = (string) ( $connection['environment'] ?? 'production' );
 		$client      = $this->clients->create( '', $environment );
+		$connection['access_token']       = '';
+		$connection['refresh_token']      = '';
+		$connection['reconnect_required'] = true;
+		update_option( self::OPTION, $connection );
 
 		// phpcs:ignore WordPress.NamingConventions.ValidVariableName.UsedPropertyNotSnakeCase -- Square SDK property name.
 		$response = $client->oAuth->obtainToken(
 			new ObtainTokenRequest(
 				array(
-					'clientId'     => self::client_id(),
+					'clientId'     => self::client_id( $environment ),
 					'grantType'    => 'refresh_token',
 					'refreshToken' => $refresh_token,
 				)
@@ -262,13 +267,19 @@ final class SquareOAuth {
 	 *
 	 * A client ID is public information; PKCE is what makes it safe to ship.
 	 */
-	public static function client_id(): string {
+	public static function client_id( ?string $environment = null ): string {
+		$environment = null === $environment ? Settings::get_environment() : $environment;
+		$client_id   = 'production' === $environment
+			? ( defined( 'SQTWC_SQUARE_PRODUCTION_CLIENT_ID' ) ? SQTWC_SQUARE_PRODUCTION_CLIENT_ID : '' )
+			: ( defined( 'SQTWC_SQUARE_SANDBOX_CLIENT_ID' ) ? SQTWC_SQUARE_SANDBOX_CLIENT_ID : '' );
+
 		/**
 		 * Filter the WCPOS Square application ID.
 		 *
 		 * @param string $client_id Square application ID.
+		 * @param string $environment Square environment.
 		 */
-		return (string) apply_filters( 'sqtwc_oauth_client_id', defined( 'SQTWC_SQUARE_CLIENT_ID' ) ? SQTWC_SQUARE_CLIENT_ID : '' );
+		return (string) apply_filters( 'sqtwc_oauth_client_id', $client_id, $environment );
 	}
 
 	/**
@@ -285,6 +296,9 @@ final class SquareOAuth {
 		}
 
 		$refresh_token = method_exists( $response, 'getRefreshToken' ) ? (string) $response->getRefreshToken() : '';
+		if ( '' === $refresh_token ) {
+			throw new RuntimeException( 'Square returned no refresh token.' );
+		}
 		$merchant_id   = method_exists( $response, 'getMerchantId' ) ? (string) $response->getMerchantId() : '';
 		$expires_at    = 0;
 

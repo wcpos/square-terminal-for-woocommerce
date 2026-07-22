@@ -196,6 +196,32 @@ final class PluginTest extends TestCase {
 		self::assertSame( 200, $GLOBALS['sqtwc_last_json_response'][1] );
 	}
 
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_validate_settings_uses_matching_oauth_credentials_without_a_manual_token(): void {
+		class_alias( CurrentSettingsSquareClientFactory::class, SquareClientFactory::class );
+		class_alias( CurrentSettingsSquareDeviceAdapter::class, SquareDeviceAdapter::class );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'environment' => 'sandbox',
+			'location_id' => 'LOC',
+		);
+		$GLOBALS['sqtwc_options'][ \WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth::OPTION ] = array(
+			'access_token' => 'oauth-token',
+			'environment'  => 'production',
+		);
+		Settings::reset_cache_for_tests();
+		$_POST = array(
+			'_wpnonce'    => 'valid',
+			'environment' => 'production',
+			'location_id' => 'LOC',
+		);
+
+		( new Plugin() )->ajax_validate_settings();
+
+		self::assertSame( array( 'oauth-token', 'production' ), CurrentSettingsSquareClientFactory::$arguments );
+		self::assertSame( 200, $GLOBALS['sqtwc_last_json_response'][1] );
+	}
+
 	public function test_validate_settings_calls_square_once_and_maps_errors(): void {
 		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'location_id' => 'LOC' );
 		Settings::reset_cache_for_tests();
