@@ -842,13 +842,14 @@ class Gateway extends \WC_Payment_Gateway {
 			'<p class="sqtwc-webhook sqtwc-webhook--%1$s">%2$s</p>'
 			. '<div class="sqtwc-webhook-copy">'
 			. '<input type="text" id="sqtwc-webhook-url" class="sqtwc-webhook-url" value="%3$s" readonly onfocus="this.select()" />'
-			. '<button type="button" class="button" id="sqtwc-copy-webhook" data-copied="%4$s">%5$s</button>'
+			. '<button type="button" class="button" id="sqtwc-copy-webhook" data-copied="%4$s" data-failed="%5$s">%6$s</button>'
 			. '</div>'
-			. '<p class="description">%6$s</p>',
+			. '<p class="description">%7$s</p>',
 			esc_attr( $state ),
 			esc_html( $message ),
 			esc_attr( Settings::get_webhook_notification_url() ),
 			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
+			esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Add this URL in Square. Optional.', 'square-terminal-for-woocommerce' )
 				. ' ' . self::docs_link( '#webhooks' )

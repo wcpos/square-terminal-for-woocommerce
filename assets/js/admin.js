@@ -194,21 +194,37 @@
 		button.addEventListener('click', function () {
 			input.select();
 
-			function done() {
-				button.textContent = button.getAttribute('data-copied') || 'Copied';
-				window.setTimeout(function () { button.textContent = original; }, 2000);
+			function flash(text) {
+				button.textContent = text;
+				window.setTimeout(function () { button.textContent = original; }, 2500);
 			}
 
-			// execCommand is the fallback: the async Clipboard API needs a secure
-			// context, and plenty of WordPress admins are served over plain http.
+			function copied() { flash(button.getAttribute('data-copied') || 'Copied'); }
+
+			// The input stays selected, so a failure leaves the merchant able to
+			// copy by hand — but the button must not claim success either way.
+			function failed() { flash(button.getAttribute('data-failed') || 'Press Ctrl+C'); }
+
+			// execCommand returns false when the browser blocks legacy copying,
+			// without throwing, so its result has to be checked rather than
+			// assumed. The async Clipboard API needs a secure context and plenty
+			// of WordPress admins are served over plain http.
+			function legacyCopy() {
+				try {
+					return document.execCommand('copy') === true;
+				} catch (e) {
+					return false;
+				}
+			}
+
 			if (navigator.clipboard && navigator.clipboard.writeText) {
-				navigator.clipboard.writeText(input.value).then(done, function () {
-					try { document.execCommand('copy'); done(); } catch (e) {}
+				navigator.clipboard.writeText(input.value).then(copied, function () {
+					if (legacyCopy()) { copied(); } else { failed(); }
 				});
 				return;
 			}
 
-			try { document.execCommand('copy'); done(); } catch (e) {}
+			if (legacyCopy()) { copied(); } else { failed(); }
 		});
 	}
 

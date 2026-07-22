@@ -77,6 +77,10 @@ final class AdminUiTest extends TestCase {
 		// admins are served over plain http, so a fallback is required.
 		self::assertStringContainsString( 'navigator.clipboard', $js );
 		self::assertStringContainsString( 'execCommand', $js );
+		// execCommand returns false when the browser blocks legacy copying,
+		// without throwing, so the button must not claim success regardless.
+		self::assertStringContainsString( "execCommand('copy') === true", $js );
+		self::assertStringContainsString( 'data-failed', $js );
 	}
 
 	public function test_admin_js_binds_buttons_and_sends_the_nonce(): void {
