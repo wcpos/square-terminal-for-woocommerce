@@ -179,8 +179,58 @@
 		sync();
 	}
 
+	/**
+	 * Copy the webhook URL, so it never has to be selected out of a narrow box.
+	 */
+	function bindCopyWebhook() {
+		var button = document.getElementById('sqtwc-copy-webhook');
+		var input = document.getElementById('sqtwc-webhook-url');
+		if (!button || !input) {
+			return;
+		}
+
+		var original = button.textContent;
+
+		button.addEventListener('click', function () {
+			input.select();
+
+			function flash(text) {
+				button.textContent = text;
+				window.setTimeout(function () { button.textContent = original; }, 2500);
+			}
+
+			function copied() { flash(button.getAttribute('data-copied') || 'Copied'); }
+
+			// The input stays selected, so a failure leaves the merchant able to
+			// copy by hand — but the button must not claim success either way.
+			function failed() { flash(button.getAttribute('data-failed') || 'Press Ctrl+C'); }
+
+			// execCommand returns false when the browser blocks legacy copying,
+			// without throwing, so its result has to be checked rather than
+			// assumed. The async Clipboard API needs a secure context and plenty
+			// of WordPress admins are served over plain http.
+			function legacyCopy() {
+				try {
+					return document.execCommand('copy') === true;
+				} catch (e) {
+					return false;
+				}
+			}
+
+			if (navigator.clipboard && navigator.clipboard.writeText) {
+				navigator.clipboard.writeText(input.value).then(copied, function () {
+					if (legacyCopy()) { copied(); } else { failed(); }
+				});
+				return;
+			}
+
+			if (legacyCopy()) { copied(); } else { failed(); }
+		});
+	}
+
 	function init() {
 		trackEnvironment();
+		bindCopyWebhook();
 		bind('sqtwc-check-readers', 'sqtwc_list_devices', renderReaders);
 		bind('sqtwc-create-device-code', 'sqtwc_create_device_code', function (body) {
 			var template = strings.pairingCode || 'Pairing code: %s';

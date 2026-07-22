@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.7.0] - 2026-07-22
+
+### Changed
+
+- **The webhook URL is now readable and copyable.** It was shown in a box too narrow to display it, leaving merchants to scroll inside the field and select it by hand. It now takes the full width of the column with a **Copy** button beside it.
+- **Less text on the settings screen.** Descriptions state what a field is; the guide states how to use it. Every section links to the [documentation](https://docs.wcpos.com/payment/gateways/square-terminal) instead of repeating it inline, and tests cap the length of each description and of the webhook row so the verbosity cannot creep back.
+
 ## [0.6.1] - 2026-07-22
 
 ### Fixed

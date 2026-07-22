@@ -67,6 +67,24 @@
 	margin: 0 0 0.5em;
 }
 
+/* The URL is the point of this row, so it takes the width. A truncated value
+   the merchant has to scroll inside is worse than no field at all. */
+.sqtwc-webhook-copy {
+	display: flex;
+	gap: 0.5em;
+	align-items: center;
+	max-width: 40em;
+}
+
+.sqtwc-webhook-copy .sqtwc-webhook-url {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.sqtwc-webhook-copy .button {
+	flex: 0 0 auto;
+}
+
 .sqtwc-webhook--ok {
 	color: #007017;
 }
@@ -77,5 +95,7 @@
 
 .sqtwc-webhook-url {
 	font-family: monospace;
+	font-size: 0.9em;
 	background: #f6f7f7;
+	direction: ltr;
 }
