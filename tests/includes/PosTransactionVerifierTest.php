@@ -54,6 +54,17 @@ final class PosTransactionVerifierTest extends TestCase {
 		( new PosTransactionVerifier( (object) array( 'orders' => $orders, 'payments' => new PosPaymentsClient() ) ) )->verify( 'order_1' );
 	}
 
+	public function test_non_card_tenders_are_ignored_even_with_payment_ids(): void {
+		$orders = new PosOrdersClient();
+		$orders->tenders = array( new Tender( array( 'type' => 'CASH', 'paymentId' => 'pay_cash' ) ), new Tender( array( 'type' => 'CARD', 'paymentId' => 'pay_1' ) ) );
+		$payments = new PosPaymentsClient();
+		$payments->payments['pay_1'] = array( 'status' => 'COMPLETED', 'amount' => 1234, 'currency' => 'USD' );
+		$result = ( new PosTransactionVerifier( (object) array( 'orders' => $orders, 'payments' => $payments ) ) )->verify( 'order_1' );
+		self::assertSame( array( 'pay_1' ), $result['payment_ids'] );
+		self::assertSame( 1234, $result['amount'] );
+		self::assertCount( 1, $payments->requests );
+	}
+
 	public function test_mixed_payment_currencies_fail_verification(): void {
 		$orders = new PosOrdersClient();
 		$orders->tenders = array( new Tender( array( 'type' => 'CARD', 'paymentId' => 'pay_1' ) ), new Tender( array( 'type' => 'CARD', 'paymentId' => 'pay_2' ) ) );

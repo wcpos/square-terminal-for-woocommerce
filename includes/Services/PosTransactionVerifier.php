@@ -41,6 +41,12 @@ final class PosTransactionVerifier {
 		$amount      = 0;
 		$currency    = '';
 		foreach ( $order->getTenders() ?? array() as $tender ) {
+			// The handoff requests card-only tenders; anything else (cash added
+			// on the Square side, gift cards) must not satisfy verification.
+			if ( 'CARD' !== (string) $tender->getType() ) {
+				continue;
+			}
+
 			$payment_id = (string) $tender->getPaymentId();
 			if ( '' === $payment_id ) {
 				continue;

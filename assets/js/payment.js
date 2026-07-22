@@ -863,7 +863,9 @@
 			'intent:#Intent',
 			'action=com.squareup.pos.action.CHARGE',
 			'package=com.squareup',
-			'S.browser_fallback_url=' + encodeURIComponent(cfg.posCallbackUrl),
+			// Fallback lands where the cashier can recover (the order-pay page),
+			// not the bare callback route, which rejects state-less requests.
+			'S.browser_fallback_url=' + encodeURIComponent(cfg.fallbackUrl || cfg.posCallbackUrl),
 			'S.com.squareup.pos.WEB_CALLBACK_URI=' + encodeURIComponent(cfg.posCallbackUrl),
 			'S.com.squareup.pos.CLIENT_ID=' + encodeURIComponent(cfg.posApplicationId),
 			'S.com.squareup.pos.API_VERSION=v2.0',
@@ -878,7 +880,7 @@
 		if (cfg.note) {
 			parts.push('S.com.squareup.pos.NOTE=' + encodeURIComponent(cfg.note));
 		}
-		parts.push('i.com.squareup.pos.AUTO_RETURN_TIMEOUT_MS=3200', 'end');
+		parts.push('l.com.squareup.pos.AUTO_RETURN_TIMEOUT_MS=3200', 'end');
 		return parts.join(';');
 	}
 
@@ -936,6 +938,7 @@
 				button.disabled = true;
 				var cfg = copyObject(config);
 				cfg.state = buildPosState(config);
+				cfg.fallbackUrl = String(locationRef.href || '');
 				navigate(platform === 'android' ? buildAndroidPosUrl(cfg) : buildIosPosUrl(cfg));
 			},
 			beaconCancel: function () { return false; }
@@ -950,8 +953,18 @@
 				setPosStatus(strings.posProductionRequired);
 				return;
 			}
+			if (!config.posApplicationId || !config.posLocationId) {
+				disable(button, true);
+				setPosStatus(strings.posMissingConfig);
+				return;
+			}
 
 			var params = parseQuery(locationRef.search || '');
+			if (params.sqtwc_pos_result === 'partial') {
+				disable(button, true);
+				setPosStatus(strings.posPartial);
+				return;
+			}
 			if (params.sqtwc_pos_result === 'offline') {
 				disable(button, false);
 				setPosStatus(strings.posOffline);

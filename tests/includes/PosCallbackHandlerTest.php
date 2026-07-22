@@ -118,12 +118,41 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertSame( 'sq-order', $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
 	}
 
-	public function test_under_collection_places_order_on_hold_without_completing_it(): void {
+	public function test_under_collection_places_order_on_hold_with_terminal_partial_result(): void {
 		$this->verifier->result['amount'] = 1000;
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'state' => $this->state() ) ) ) );
-		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertStringContainsString( 'sqtwc_pos_result=partial', $url );
+		self::assertStringNotContainsString( 'verification_failed', $url );
 		self::assertSame( 'on-hold', $this->order->status );
 		self::assertFalse( $this->order->paid );
+	}
+
+	public function test_missing_location_setting_fails_closed(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['location_id'] = '';
+		Settings::reset_cache_for_tests();
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+	}
+
+	public function test_transaction_claim_is_atomic_across_orders(): void {
+		$GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-order' ) ] = '42';
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+	}
+
+	public function test_verified_payment_records_transaction_claim(): void {
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '99', $GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-order' ) ] );
+	}
+
+	public function test_verification_tolerates_collection_method_drift(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['collection_method'] = 'terminal';
+		Settings::reset_cache_for_tests();
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertTrue( $this->order->paid );
 	}
 
 	public function test_duplicate_transaction_id_is_rejected(): void {

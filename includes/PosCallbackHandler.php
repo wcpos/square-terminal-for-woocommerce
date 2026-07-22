@@ -109,18 +109,15 @@ final class PosCallbackHandler {
 
 		try {
 			$verified = $this->verifier->verify( $callback['transaction_id'] );
-			$completed = $this->order_lock->with_lock(
+			$outcome  = $this->order_lock->with_lock(
 				$order_id,
-				function () use ( $order_id, $callback, $verified ): bool {
+				function () use ( $order_id, $callback, $verified ): string {
 					$locked_order = wc_get_order( $order_id );
 					if ( ! $locked_order ) {
 						throw new \RuntimeException( 'WooCommerce order disappeared during verification.' );
 					}
 					if ( $locked_order->is_paid() ) {
-						return true;
-					}
-					if ( 'pos_app' !== Settings::get_collection_method() || 'production' !== Settings::get_environment() ) {
-						throw new \RuntimeException( 'Square POS app handoff is not configured for production.' );
+						return 'completed';
 					}
 
 					$duplicates = wc_get_orders(
@@ -137,11 +134,17 @@ final class PosCallbackHandler {
 					}
 
 					$location_id = Settings::get_location_id();
+					if ( '' === $location_id ) {
+						throw new \RuntimeException( 'A Square location ID must be configured before POS app payments can be accepted.' );
+					}
 					if ( $locked_order->get_currency() !== (string) ( $verified['currency'] ?? '' ) ) {
 						throw new \RuntimeException( 'Square POS payment currency does not match the order.' );
 					}
-					if ( '' !== $location_id && (string) ( $verified['location_id'] ?? '' ) !== $location_id ) {
+					if ( (string) ( $verified['location_id'] ?? '' ) !== $location_id ) {
 						throw new \RuntimeException( 'Square POS payment location does not match the configured location.' );
+					}
+					if ( ! self::claim_transaction( $callback['transaction_id'], $order_id ) ) {
+						throw new \RuntimeException( 'Square POS transaction is already assigned to another order.' );
 					}
 
 					$payment_ids = array_values( array_map( 'strval', (array) ( $verified['payment_ids'] ?? array() ) ) );
@@ -162,7 +165,7 @@ final class PosCallbackHandler {
 						$locked_order->update_status( 'on-hold' );
 						$locked_order->save();
 
-						return false;
+						return 'partial';
 					}
 
 					$locked_order->add_order_note(
@@ -176,7 +179,7 @@ final class PosCallbackHandler {
 					$locked_order->payment_complete( (string) ( $payment_ids[0] ?? '' ) );
 					$locked_order->save();
 
-					return true;
+					return 'completed';
 				}
 			);
 		} catch ( Throwable $exception ) {
@@ -194,10 +197,26 @@ final class PosCallbackHandler {
 			$this->redirect_to_payment( $order, 'error', 'verification_failed' );
 		}
 
-		if ( ! $completed ) {
-			$this->redirect_to_payment( $order, 'error', 'verification_failed' );
+		if ( 'partial' === $outcome ) {
+			$this->redirect_to_payment( $order, 'partial' );
 		}
 		$this->redirect_to_receipt( $order );
+	}
+
+	/**
+	 * Atomically claim a Square transaction ID for exactly one order.
+	 *
+	 * The order lock is keyed by order ID, so it cannot serialize two
+	 * different orders replaying the same transaction. add_option() is an
+	 * INSERT under the hood — the first caller wins across all requests.
+	 */
+	private static function claim_transaction( string $transaction_id, int $order_id ): bool {
+		$option_name = 'sqtwc_pos_txn_' . md5( $transaction_id );
+		if ( add_option( $option_name, (string) $order_id, '', 'no' ) ) {
+			return true;
+		}
+
+		return (string) get_option( $option_name, '' ) === (string) $order_id;
 	}
 
 	/** Redirect back to the authenticated order-pay page. */

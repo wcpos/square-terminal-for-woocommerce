@@ -116,9 +116,14 @@ final class Settings {
 
 	/**
 	 * Return the POS app web callback route.
+	 *
+	 * Sites behind a proxy whose derived REST URL differs from the public
+	 * HTTPS URL registered with Square can correct it via the filter.
 	 */
 	public static function get_pos_callback_url(): string {
-		return function_exists( 'rest_url' ) ? (string) rest_url( 'sqtwc/v1/pos-callback' ) : '';
+		$url = function_exists( 'rest_url' ) ? (string) rest_url( 'sqtwc/v1/pos-callback' ) : '';
+
+		return (string) apply_filters( 'sqtwc_pos_callback_url', $url );
 	}
 
 	/**

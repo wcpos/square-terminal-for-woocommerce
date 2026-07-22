@@ -452,6 +452,8 @@ class Gateway extends \WC_Payment_Gateway {
 			'posNoNetwork'       => __( 'The Square Point of Sale app could not reach the network.', 'square-terminal-for-woocommerce' ),
 			'posUnsupported'     => __( 'Open this payment page on a supported Android or iOS device with the Square Point of Sale app installed.', 'square-terminal-for-woocommerce' ),
 			'posProductionRequired' => __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ),
+			'posMissingConfig'   => __( 'Add your Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' ),
+			'posPartial'         => __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' ),
 			'posOffline'         => __( 'Payment was taken offline in the Square app. The order will need manual verification once the Square app is back online.', 'square-terminal-for-woocommerce' ),
 			/* translators: %s: Square POS app error code. */
 			'posError'           => __( 'Payment was not completed: %s', 'square-terminal-for-woocommerce' ),
@@ -806,7 +808,7 @@ class Gateway extends \WC_Payment_Gateway {
 	private static function render_pos_payment_ui( int $order_id, $order ): string {
 		$currency = $order ? (string) $order->get_currency() : '';
 		$amount   = $order ? CurrencyConverter::to_minor_units( $order->get_total(), $currency ) : 0;
-		$sandbox  = 'production' !== Settings::get_environment();
+		$blocked  = self::pos_blocked_message( $order );
 
 		return sprintf(
 			'<div id="sqtwc-payment" class="sqtwc-payment" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">'
@@ -818,10 +820,29 @@ class Gateway extends \WC_Payment_Gateway {
 			$amount,
 			esc_attr( $currency ),
 			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' ),
-			$sandbox ? ' disabled' : '',
+			'' !== $blocked ? ' disabled' : '',
 			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' ),
-			$sandbox ? esc_html__( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ) : ''
+			esc_html( $blocked )
 		);
+	}
+
+	/**
+	 * Return the reason the POS handoff cannot start, or '' when it can.
+	 *
+	 * @param object|null $order The order being paid.
+	 */
+	private static function pos_blocked_message( $order ): string {
+		if ( 'production' !== Settings::get_environment() ) {
+			return __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' );
+		}
+		if ( '' === Settings::get_pos_application_id() || '' === Settings::get_location_id() ) {
+			return __( 'Add your Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' );
+		}
+		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
+			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
+		}
+
+		return '';
 	}
 
 	/**
