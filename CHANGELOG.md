@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
-## Unreleased
+## [0.8.0] - 2026-07-23
 
 ### Added
 
@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file. Release notes f
 ### Changed
 
 - **Guided Square device setup.** The settings page now uses device cards, progressive disclosure, and a five-step checklist to guide merchants through Square Reader setup.
+
+### Fixed
+
+- **Malformed application IDs fail closed.** A saved application ID that does not match Square's production format (`sq0idp-` plus 22 characters) disables the handoff button with a clear settings message instead of launching the Square app into an error.
 
 ## [0.7.1] - 2026-07-22
 
