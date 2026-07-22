@@ -22,7 +22,7 @@ final class OrderAccess {
 			return true;
 		}
 
-		if ( isset( $request['order_key'] ) && hash_equals( (string) $order->get_order_key(), (string) $request['order_key'] ) ) {
+		if ( isset( $request['order_key'] ) && '' !== (string) $request['order_key'] && hash_equals( (string) $order->get_order_key(), (string) $request['order_key'] ) ) {
 			return true;
 		}
 
