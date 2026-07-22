@@ -56,7 +56,35 @@ final class WebhookHandler {
 	 * settings screen reports.
 	 */
 	private static function record_verified_delivery(): void {
-		update_option( self::LAST_DELIVERY_OPTION, time(), false );
+		update_option(
+			self::LAST_DELIVERY_OPTION,
+			array(
+				'at'          => time(),
+				'fingerprint' => self::configuration_fingerprint(),
+			),
+			false
+		);
+	}
+
+	/**
+	 * Fingerprint the settings a webhook delivery depends on.
+	 *
+	 * Environment, notification URL and signature key all take part in
+	 * verification, so a delivery verified under one set of them says nothing
+	 * about another. The key is hashed, never stored in clear.
+	 */
+	private static function configuration_fingerprint(): string {
+		return hash(
+			'sha256',
+			implode(
+				'|',
+				array(
+					Settings::get_environment(),
+					Settings::get_webhook_notification_url(),
+					Settings::get_webhook_signature_key(),
+				)
+			)
+		);
 	}
 
 	/**
@@ -67,9 +95,15 @@ final class WebhookHandler {
 	public static function last_verified_delivery(): ?int {
 		$last = get_option( self::LAST_DELIVERY_OPTION, null );
 
-		// Tolerates the 0.6.0 development shape, which stored an array.
+		// A delivery verified under a previous environment, URL or signature key
+		// tells the merchant nothing about the current one — and would mask
+		// exactly the broken setup this row exists to reveal.
 		if ( is_array( $last ) ) {
-			$last = ! empty( $last['verified'] ) ? ( $last['at'] ?? null ) : null;
+			if ( ( $last['fingerprint'] ?? null ) !== self::configuration_fingerprint() ) {
+				return null;
+			}
+
+			$last = $last['at'] ?? null;
 		}
 
 		return is_numeric( $last ) ? (int) $last : null;

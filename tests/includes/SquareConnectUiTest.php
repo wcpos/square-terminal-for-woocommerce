@@ -202,6 +202,44 @@ final class SquareConnectUiTest extends TestCase {
 		self::assertStringNotContainsString( 'WooCommerce POS', $fields['label'] );
 	}
 
+	public function test_connecting_honours_the_environment_chosen_on_screen(): void {
+		$GLOBALS['sqtwc_current_user_can']                      = true;
+		$GLOBALS['sqtwc_nonce_valid']                           = true;
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'environment' => 'sandbox' );
+		$_GET['environment']                                    = 'production';
+		Settings::reset_cache_for_tests();
+
+		$this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
+
+		// Connect is a link, so an unsaved dropdown change was previously ignored
+		// and someone selecting Production silently authorized the sandbox app.
+		self::assertSame( 'production', Settings::get_environment() );
+		$posted = json_decode( (string) ( $GLOBALS['sqtwc_remote_posts'][0]['args']['body'] ?? '{}' ), true );
+		self::assertSame( 'production', $posted['environment'] ?? null );
+	}
+
+	public function test_an_unrecognised_environment_leaves_the_saved_one_alone(): void {
+		$GLOBALS['sqtwc_current_user_can']                      = true;
+		$GLOBALS['sqtwc_nonce_valid']                           = true;
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'environment' => 'sandbox' );
+		$_GET['environment']                                    = 'staging';
+		Settings::reset_cache_for_tests();
+
+		$this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
+
+		self::assertSame( 'sandbox', Settings::get_environment() );
+	}
+
+	public function test_the_connect_button_names_the_environment_it_will_use(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'environment' => 'production' );
+		Settings::reset_cache_for_tests();
+
+		$html = $this->gateway()->generate_square_connection_html( 'square_connection', array( 'title' => 'Square connection' ) );
+
+		self::assertStringContainsString( 'Connect to Square (production)', $html );
+		self::assertStringContainsString( 'sqtwc-connect-link', $html );
+	}
+
 	public function test_the_callback_url_is_nonce_protected(): void {
 		$url = Plugin::square_callback_url();
 

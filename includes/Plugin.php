@@ -174,6 +174,20 @@ final class Plugin {
 	 */
 	public function handle_square_connect(): void {
 		$this->guard_admin_redirect( 'sqtwc_square_connect' );
+
+		// The settings screen asks for an environment immediately above Connect,
+		// but the button is a link, so an unsaved dropdown change would otherwise
+		// be ignored and a merchant choosing Production would silently authorize
+		// the sandbox application. The selected value is carried on the link and
+		// persisted here, so the stored environment and the connection agree.
+		$environment = $this->requested_environment();
+		if ( '' !== $environment && Settings::get_environment() !== $environment ) {
+			$settings                = (array) get_option( 'woocommerce_sqtwc_settings', array() );
+			$settings['environment'] = $environment;
+			update_option( 'woocommerce_sqtwc_settings', $settings );
+			Settings::reset_cache();
+		}
+
 		if ( '' === SquareOAuth::client_id() ) {
 			$this->redirect_to_settings( 'sqtwc_connect_failed' );
 			return;
@@ -225,6 +239,18 @@ final class Plugin {
 
 		( new SquareOAuth() )->disconnect();
 		$this->redirect_to_settings( 'sqtwc_disconnected' );
+	}
+
+	/**
+	 * Return the environment requested by the connect link, if any.
+	 *
+	 * Empty when absent or unrecognised, so the saved setting stands.
+	 */
+	private function requested_environment(): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Nonce verified by guard_admin_redirect().
+		$requested = isset( $_GET['environment'] ) ? sanitize_text_field( wp_unslash( $_GET['environment'] ) ) : '';
+
+		return in_array( $requested, array( 'sandbox', 'production' ), true ) ? $requested : '';
 	}
 
 	/**

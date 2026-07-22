@@ -927,9 +927,15 @@ class Gateway extends \WC_Payment_Gateway {
 		}
 
 		return sprintf(
-			'<p><a class="button button-primary" href="%1$s">%2$s</a></p><p class="description">%3$s</p>',
+			'<p><a class="button button-primary" id="sqtwc-connect-link" href="%1$s">%2$s</a></p><p class="description">%3$s</p>',
 			esc_url( self::connection_action_url( 'sqtwc_square_connect' ) ),
-			esc_html__( 'Connect to Square', 'square-terminal-for-woocommerce' ),
+			esc_html(
+				sprintf(
+					/* translators: %s: Square environment, sandbox or production. */
+					__( 'Connect to Square (%s)', 'square-terminal-for-woocommerce' ),
+					Settings::get_environment()
+				)
+			),
 			esc_html__( 'Authorize this site with Square instead of pasting an access token. The access token below is only needed if you are not connected.', 'square-terminal-for-woocommerce' )
 		);
 	}

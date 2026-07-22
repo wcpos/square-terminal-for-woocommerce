@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.6.1] - 2026-07-22
+
+### Fixed
+
+- **Connecting now uses the environment selected on screen.** Connect is a link, so an unsaved Environment change was ignored and the saved value was used instead — meaning a merchant who selected Production and pressed Connect could silently authorize the sandbox application. The 0.6.0 layout made this more likely by placing the choice directly above the button. The selected value is now carried to the connect action and saved, and the button names the environment it will use.
+- Webhook health no longer survives a change of environment, webhook URL, or signature key. A delivery verified under a previous configuration was still reported as working under the new one, masking exactly the broken setup the row exists to reveal.
+
 ## [0.6.0] - 2026-07-22
 
 ### Changed

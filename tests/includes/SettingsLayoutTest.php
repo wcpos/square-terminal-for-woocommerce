@@ -120,13 +120,45 @@ final class SettingsLayoutTest extends TestCase {
 		self::assertStringContainsString( 'sqtwc-webhook--info', $html );
 	}
 
+	/**
+	 * Store a verified delivery recorded under the current configuration.
+	 */
+	private function record_verified_delivery( int $at ): void {
+		( new \ReflectionMethod( WebhookHandler::class, 'record_verified_delivery' ) )->invoke( null );
+		$stored         = $GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ];
+		$stored['at']   = $at;
+		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = $stored;
+	}
+
 	public function test_webhook_status_reports_a_verified_delivery(): void {
-		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = time() - 120;
+		$this->record_verified_delivery( time() - 120 );
 
 		$html = Gateway::render_webhook_status();
 
 		self::assertStringContainsString( 'received and verified', $html );
 		self::assertStringContainsString( 'sqtwc-webhook--ok', $html );
+	}
+
+	public function test_health_does_not_survive_a_change_of_signature_key(): void {
+		$this->record_verified_delivery( time() - 120 );
+		self::assertNotNull( WebhookHandler::last_verified_delivery() );
+
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'webhook_signature_key' => 'a-different-key' );
+		Settings::reset_cache_for_tests();
+
+		// A delivery verified under the old key says nothing about the new one,
+		// and would mask exactly the broken setup this row exists to reveal.
+		self::assertNull( WebhookHandler::last_verified_delivery() );
+		self::assertStringContainsString( 'No verified webhook received yet', Gateway::render_webhook_status() );
+	}
+
+	public function test_health_does_not_survive_a_change_of_environment(): void {
+		$this->record_verified_delivery( time() - 120 );
+
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'environment' => 'production' );
+		Settings::reset_cache_for_tests();
+
+		self::assertNull( WebhookHandler::last_verified_delivery() );
 	}
 
 	public function test_an_unverified_caller_cannot_make_the_screen_claim_webhooks_are_broken(): void {
