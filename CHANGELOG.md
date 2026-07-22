@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.5.0] - 2026-07-22
+
+### Added
+
+- **Connect to Square.** Authorize the site with Square instead of creating a Square application and pasting an access token. Uses the PKCE authorization-code flow: this site performs the token exchange itself and is the only holder of the resulting tokens. A fixed endpoint on wcpos.com receives the callback — Square permits one registered redirect URL per application — but it holds no application secret and never receives a token, because the PKCE code verifier never leaves this site.
+- A lapsed authorization now says so. Square's PKCE refresh tokens are single use and expire after 90 days, so a rotation that cannot be completed clears the credentials rather than retrying a spent token; the settings screen reports that reconnection is required instead of silently reverting to a disconnected state.
+
+### Changed
+
+- The **Enable** setting is now **Enable/Disable**, and says it governs web checkout only. WooCommerce POS uses the gateway once it is configured whether or not it is enabled here, and the previous wording implied otherwise. Matches the Stripe and SumUp Terminal plugins.
+
+### Notes
+
+- Manually configured access tokens continue to work exactly as before, and take effect whenever the site is not connected. An OAuth connection is used only for the environment it was authorized against, so a sandbox connection can never authorize production requests.
+
 ## [0.4.1] - 2026-07-22
 
 ### Fixed

@@ -30,6 +30,16 @@ final class SquareOAuth {
 	/** Option holding the current connection. */
 	public const OPTION = 'sqtwc_oauth_connection';
 
+	/**
+	 * WCPOS Square application IDs.
+	 *
+	 * Public values. PKCE removes the need for an application secret, which is
+	 * what makes shipping these safe — a copy of the ID alone authorizes nothing.
+	 * Square issues one per environment and rejects one used against the other.
+	 */
+	private const DEFAULT_PRODUCTION_CLIENT_ID = 'sq0idp-zZjuiZ-mkjfI-oAN-ac7SQ';
+	private const DEFAULT_SANDBOX_CLIENT_ID    = 'sandbox-sq0idb-AR_OAAuevSAxsRlg_Grk0g';
+
 	/** Transient holding an in-flight authorization attempt. */
 	private const PENDING_TRANSIENT = 'sqtwc_oauth_pending';
 
@@ -302,9 +312,14 @@ final class SquareOAuth {
 	 */
 	public static function client_id( ?string $environment = null ): string {
 		$environment = null === $environment ? Settings::get_environment() : $environment;
-		$client_id   = 'production' === $environment
-			? ( defined( 'SQTWC_SQUARE_PRODUCTION_CLIENT_ID' ) ? SQTWC_SQUARE_PRODUCTION_CLIENT_ID : '' )
-			: ( defined( 'SQTWC_SQUARE_SANDBOX_CLIENT_ID' ) ? SQTWC_SQUARE_SANDBOX_CLIENT_ID : '' );
+
+		// Every install shares one WCPOS Square application — that is the whole
+		// point of the flow — so the IDs ship with the plugin. They are public
+		// values; PKCE is what makes publishing them safe, and the application
+		// secret is never used or stored anywhere in this plugin.
+		$client_id = 'production' === $environment
+			? ( defined( 'SQTWC_SQUARE_PRODUCTION_CLIENT_ID' ) ? SQTWC_SQUARE_PRODUCTION_CLIENT_ID : self::DEFAULT_PRODUCTION_CLIENT_ID )
+			: ( defined( 'SQTWC_SQUARE_SANDBOX_CLIENT_ID' ) ? SQTWC_SQUARE_SANDBOX_CLIENT_ID : self::DEFAULT_SANDBOX_CLIENT_ID );
 
 		/**
 		 * Filter the WCPOS Square application ID.

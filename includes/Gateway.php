@@ -446,8 +446,18 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$this->form_fields = array(
 			'enabled'                  => array(
-				'title' => __( 'Enable', 'square-terminal-for-woocommerce' ),
-				'type'  => 'checkbox',
+				'title'       => __( 'Enable/Disable', 'square-terminal-for-woocommerce' ),
+				'type'        => 'checkbox',
+				// This setting governs the online store only. WooCommerce POS uses
+				// the gateway once it is configured, whether or not it is enabled
+				// here, and a bare "Enable" implied the POS needed it too.
+				'label'       => sprintf(
+					/* translators: %s: link to WooCommerce POS. */
+					__( 'Enable Square Terminal for web checkout (not necessary for %s)', 'square-terminal-for-woocommerce' ),
+					'<a href="https://wcpos.com" target="_blank">WooCommerce POS</a>'
+				),
+				'description' => __( 'This enables the gateway for online store checkout. The POS uses this gateway automatically when configured.', 'square-terminal-for-woocommerce' ),
+				'default'     => 'no',
 			),
 			'environment'              => array(
 				'title'       => __( 'Environment', 'square-terminal-for-woocommerce' ),

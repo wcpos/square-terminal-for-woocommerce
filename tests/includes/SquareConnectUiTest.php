@@ -42,10 +42,18 @@ final class SquareConnectUiTest extends TestCase {
 		self::fail( 'Expected the handler to redirect.' );
 	}
 
-	public function test_connection_row_is_absent_until_an_application_is_configured(): void {
-		// Without a WCPOS Square application there is nothing to connect to, so an
-		// unfinished flow must never appear on a live settings screen.
-		self::assertSame( '', SquareOAuth::client_id() );
+	public function test_the_wcpos_application_ids_ship_with_the_plugin(): void {
+		// Every install shares one WCPOS Square application, so the IDs ship
+		// rather than being configured per site. PKCE is what makes publishing
+		// them safe — the ID alone authorizes nothing.
+		self::assertStringStartsWith( 'sq0idp-', SquareOAuth::client_id( 'production' ) );
+		self::assertStringStartsWith( 'sandbox-sq0idb-', SquareOAuth::client_id( 'sandbox' ) );
+	}
+
+	public function test_connection_row_can_still_be_disabled_by_filter(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_oauth_client_id'] = '';
+
+		// The escape hatch matters for a site running its own Square application.
 		self::assertSame( '', $this->gateway()->generate_square_connection_html( 'square_connection', array( 'title' => 'Square connection' ) ) );
 	}
 
@@ -107,11 +115,14 @@ final class SquareConnectUiTest extends TestCase {
 	}
 
 	public function test_connect_is_inactive_at_the_server_boundary_without_an_application_id(): void {
-		$GLOBALS['sqtwc_current_user_can'] = true;
-		$GLOBALS['sqtwc_nonce_valid']      = true;
+		$GLOBALS['sqtwc_current_user_can']                          = true;
+		$GLOBALS['sqtwc_nonce_valid']                               = true;
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_oauth_client_id'] = '';
 
 		$location = $this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
 
+		// A site that has deliberately cleared the application ID must not reach
+		// the relay at all, rather than starting an authorization it cannot finish.
 		self::assertStringContainsString( 'sqtwc_connect_failed', $location );
 		self::assertSame( array(), $GLOBALS['sqtwc_remote_posts'] );
 	}
@@ -173,6 +184,19 @@ final class SquareConnectUiTest extends TestCase {
 		// a bare "Connect to Square" and give no clue why the connection ended.
 		self::assertStringContainsString( 'Reconnect to Square required', $html );
 		self::assertStringContainsString( 'could not be renewed', $html );
+	}
+
+	public function test_enable_setting_says_it_governs_web_checkout_only(): void {
+		$fields = $this->gateway()->form_fields['enabled'];
+
+		// The POS uses the gateway once configured regardless of this setting, so
+		// a bare "Enable" read as though the POS needed it too. Matches the
+		// wording already used by the Stripe and SumUp Terminal plugins.
+		self::assertSame( 'Enable/Disable', $fields['title'] );
+		self::assertStringContainsString( 'web checkout', $fields['label'] );
+		self::assertStringContainsString( 'not necessary for', $fields['label'] );
+		self::assertStringContainsString( 'wcpos.com', $fields['label'] );
+		self::assertStringContainsString( 'POS uses this gateway automatically', $fields['description'] );
 	}
 
 	public function test_the_callback_url_is_nonce_protected(): void {
