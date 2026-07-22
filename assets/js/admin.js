@@ -54,14 +54,14 @@
 		});
 	}
 
-	function bind(buttonId, action, onSuccess) {
+	function bind(buttonId, action, onSuccess, statusId) {
 		var button = document.getElementById(buttonId);
 		if (!button) {
 			return;
 		}
 
 		button.addEventListener('click', function () {
-			var status = document.getElementById('sqtwc-admin-status');
+			var status = document.getElementById(statusId || 'sqtwc-admin-status');
 			button.disabled = true;
 			setStatus(status, strings.working || 'Working…', false);
 
@@ -163,9 +163,20 @@
 		}
 
 		var base = link.getAttribute('href');
+		var radios = document.querySelectorAll('input[name="woocommerce_sqtwc_collection_method"]');
+
+		function selectedMode() {
+			for (var i = 0; i < radios.length; i++) {
+				if (radios[i].checked) { return radios[i].value; }
+			}
+			return 'terminal';
+		}
 
 		function sync() {
-			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value));
+			// Connect is a link, not a submit: unsaved form state would be lost
+			// across the OAuth round-trip, so the link carries it and the
+			// connect handler persists it (environment and device choice alike).
+			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value) + '&collection_method=' + encodeURIComponent(selectedMode()));
 
 			// The label has to move with the link. Updating only the URL would
 			// leave the button reading "sandbox" while starting a production
@@ -176,6 +187,7 @@
 		}
 
 		select.addEventListener('change', sync);
+		for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
 		sync();
 	}
 
@@ -233,8 +245,85 @@
 		});
 	}
 
+	/** Settings rows grouped by the device that uses them. */
+	var modeRows = {
+		terminal: ['section_terminal', 'terminal_pairing', 'webhook_status', 'collect_signature'],
+		pos_app: ['pos_application_id']
+	};
+
+	function trackDeviceMode() {
+		var radios = document.querySelectorAll('input[name="woocommerce_sqtwc_collection_method"]');
+
+		function sync() {
+			var selected = 'terminal';
+			var mode;
+			var i;
+
+			for (i = 0; i < radios.length; i++) {
+				if (radios[i].checked) { selected = radios[i].value; }
+			}
+			for (mode in modeRows) {
+				if (Object.prototype.hasOwnProperty.call(modeRows, mode)) {
+					for (i = 0; i < modeRows[mode].length; i++) {
+						var field = document.getElementById('woocommerce_sqtwc_' + modeRows[mode][i]);
+						var row = field ? field.closest('tr') : null;
+						if (field) { (row || field).style.display = mode === selected ? '' : 'none'; }
+						if (field && !row && field.nextElementSibling && field.nextElementSibling.tagName === 'P') {
+							field.nextElementSibling.style.display = mode === selected ? '' : 'none';
+						}
+					}
+				}
+			}
+		}
+
+		for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
+		sync();
+	}
+
+	/** Keep the checklist's test-mode banner honest before the form is saved. */
+	function trackSandboxNotice() {
+		var select = document.getElementById('woocommerce_sqtwc_environment');
+		var notice = document.getElementById('sqtwc-setup-sandbox-notice');
+		if (!select || !notice) { return; }
+
+		function sync() {
+			notice.style.display = select.value === 'sandbox' ? '' : 'none';
+		}
+
+		select.addEventListener('change', sync);
+		sync();
+	}
+
+	function validateApplicationId() {
+		var input = document.getElementById('woocommerce_sqtwc_pos_application_id');
+		var status = document.getElementById('sqtwc-pos-application-status');
+		if (!input || !status) { return; }
+
+		function sync() {
+			var value = input.value.trim();
+			status.className = 'sqtwc-setup__input-status';
+			if (!value) { status.textContent = ''; return; }
+			if (/^sq0idp-[\w-]{8,}$/.test(value)) {
+				status.textContent = strings.applicationIdValid || '✓ That looks right';
+				status.className += ' sqtwc-setup__input-status--ok';
+			} else if (value.indexOf('sandbox-') === 0) {
+				status.textContent = strings.applicationIdSandbox || 'That\'s the test ID — you need the one starting with sq0idp-';
+				status.className += ' sqtwc-setup__input-status--warning';
+			} else {
+				status.textContent = strings.applicationIdInvalid || 'Application IDs start with sq0idp-';
+				status.className += ' sqtwc-setup__input-status--muted';
+			}
+		}
+
+		input.addEventListener('input', sync);
+		sync();
+	}
+
 	function init() {
 		trackEnvironment();
+		trackSandboxNotice();
+		trackDeviceMode();
+		validateApplicationId();
 		bindCopyWebhook();
 		bind('sqtwc-check-readers', 'sqtwc_list_devices', renderReaders);
 		bind('sqtwc-create-device-code', 'sqtwc_create_device_code', function (body) {
@@ -244,6 +333,11 @@
 		bind('sqtwc-validate-settings', 'sqtwc_validate_settings', function () {
 			return strings.settingsOk || 'Square credentials and location verified.';
 		});
+		// Reader mode hides the Terminal pairing row, so the checklist carries
+		// its own connection check wired to the same validation action.
+		bind('sqtwc-pos-validate-settings', 'sqtwc_validate_settings', function () {
+			return strings.settingsOk || 'Square credentials and location verified.';
+		}, 'sqtwc-pos-validate-status');
 	}
 
 	if (document.readyState === 'loading') {

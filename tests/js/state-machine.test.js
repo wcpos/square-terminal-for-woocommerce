@@ -36,7 +36,8 @@ test('admin actions send the current environment, token, and location', async ()
 		},
 		document: {
 			readyState: 'complete',
-			getElementById: function (id) { return elements[id] || null; }
+			getElementById: function (id) { return elements[id] || null; },
+			querySelectorAll: function () { return []; }
 		},
 		fetch: function (url, options) {
 			request = { url: url, options: options };

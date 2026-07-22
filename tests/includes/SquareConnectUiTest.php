@@ -218,6 +218,33 @@ final class SquareConnectUiTest extends TestCase {
 		self::assertSame( 'production', $posted['environment'] ?? null );
 	}
 
+	public function test_connecting_honours_the_device_chosen_on_screen(): void {
+		$GLOBALS['sqtwc_current_user_can']                      = true;
+		$GLOBALS['sqtwc_nonce_valid']                           = true;
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'environment' => 'production' );
+		$_GET['environment']                                    = 'production';
+		$_GET['collection_method']                              = 'pos_app';
+		Settings::reset_cache_for_tests();
+
+		$this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
+
+		// The Reader checklist points at Connect before the form is saved; the
+		// link carries the unsaved radio choice so OAuth doesn't discard it.
+		self::assertSame( 'pos_app', Settings::get_collection_method() );
+	}
+
+	public function test_an_unrecognised_collection_method_leaves_the_saved_one_alone(): void {
+		$GLOBALS['sqtwc_current_user_can']                      = true;
+		$GLOBALS['sqtwc_nonce_valid']                           = true;
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'collection_method' => 'pos_app' );
+		$_GET['collection_method']                              = 'both-please';
+		Settings::reset_cache_for_tests();
+
+		$this->capture_redirect( static fn() => ( new Plugin() )->handle_square_connect() );
+
+		self::assertSame( 'pos_app', Settings::get_collection_method() );
+	}
+
 	public function test_an_unrecognised_environment_leaves_the_saved_one_alone(): void {
 		$GLOBALS['sqtwc_current_user_can']                      = true;
 		$GLOBALS['sqtwc_nonce_valid']                           = true;

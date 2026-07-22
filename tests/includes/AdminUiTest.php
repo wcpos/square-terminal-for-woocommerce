@@ -92,6 +92,18 @@ final class AdminUiTest extends TestCase {
 		self::assertStringContainsString( '_wpnonce', $js );
 	}
 
+	public function test_admin_js_switches_device_rows_and_validates_application_ids(): void {
+		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
+
+		self::assertStringContainsString( 'section_terminal', $js );
+		self::assertStringContainsString( 'pos_application_id', $js );
+		self::assertStringContainsString( 'nextElementSibling', $js );
+		self::assertStringContainsString( "querySelectorAll('input[name=\"woocommerce_sqtwc_collection_method\"]')", $js );
+		self::assertStringContainsString( '✓ That looks right', $js );
+		self::assertStringContainsString( 'test ID — you need the one starting with sq0idp-', $js );
+		self::assertStringContainsString( 'Application IDs start with sq0idp-', $js );
+	}
+
 	public function test_pairing_controls_use_non_submitting_buttons(): void {
 		$html = Gateway::render_admin_fields();
 

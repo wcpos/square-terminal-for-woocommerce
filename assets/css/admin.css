@@ -26,6 +26,154 @@
 	outline-offset: 2px;
 }
 
+.sqtwc-device-chooser {
+	max-width: 62em;
+	padding: 0;
+	border: 0;
+}
+.sqtwc-device-chooser legend,
+.sqtwc-setup h2 {
+	font-size: 1.35em;
+	font-weight: 600;
+	color: #1d2327;
+}
+.sqtwc-device-chooser__cards {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1em;
+	margin-top: 1em;
+}
+.sqtwc-device-card {
+	position: relative;
+}
+.sqtwc-device-card__input {
+	position: absolute;
+	opacity: 0;
+}
+.sqtwc-device-card__body {
+	display: flex;
+	gap: 1em;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 1.25em;
+	border: 2px solid #c3c4c7;
+	border-radius: 6px;
+	background: #fff;
+	cursor: pointer;
+}
+.sqtwc-device-card__input:checked + .sqtwc-device-card__body {
+	border-color: #2271b1;
+	background: #f0f6fc;
+}
+.sqtwc-device-card__input:focus-visible + .sqtwc-device-card__body {
+	outline: 2px solid #2271b1;
+	outline-offset: 2px;
+}
+.sqtwc-device-card svg {
+	flex: 0 0 3.5em;
+	width: 3.5em;
+	height: 3.5em;
+	fill: none;
+	stroke: #646970;
+	stroke-width: 2.5;
+}
+.sqtwc-device-card strong,
+.sqtwc-device-card strong + span {
+	display: block;
+}
+.sqtwc-device-card strong {
+	margin-bottom: 0.35em;
+	color: #1d2327;
+}
+.sqtwc-setup {
+	max-width: 62em;
+}
+.sqtwc-setup__notice {
+	margin: 1em 0;
+	padding: 0.85em 1em;
+	border-left: 4px solid #dba617;
+	background: #fcf9e8;
+}
+.sqtwc-setup__step {
+	display: grid;
+	grid-template-columns: 2.25em minmax(0, 1fr);
+	gap: 1em;
+	margin: 0;
+	padding: 1.25em 0;
+	border-top: 1px solid #dcdcde;
+}
+.sqtwc-setup__number {
+	display: grid;
+	place-items: center;
+	width: 2.25em;
+	height: 2.25em;
+	border-radius: 50%;
+	background: #dcdcde;
+	font-weight: 700;
+}
+.sqtwc-setup__step--done .sqtwc-setup__number {
+	color: #fff;
+	background: #008a20;
+}
+.sqtwc-setup__step header {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 0.5em;
+	min-height: 2.25em;
+}
+.sqtwc-setup__step header > strong {
+	margin-right: auto;
+	font-size: 1.08em;
+}
+.sqtwc-setup__step ol {
+	padding-left: 1.5em;
+	list-style: decimal;
+}
+.sqtwc-setup__chip,
+.sqtwc-setup__connected {
+	display: inline-block;
+	padding: 0.15em 0.55em;
+	border-radius: 999px;
+	background: #f0f0f1;
+	font-size: 0.9em;
+}
+.sqtwc-setup__chip--done,
+.sqtwc-setup__connected,
+.sqtwc-setup__input-status--ok {
+	color: #007017;
+	background: #edfaef;
+}
+.sqtwc-setup label[for="woocommerce_sqtwc_pos_application_id"] {
+	display: block;
+	margin: 1em 0 0.35em;
+	font-weight: 600;
+}
+.sqtwc-setup #woocommerce_sqtwc_pos_application_id {
+	width: min(100%, 32em);
+}
+.sqtwc-setup__input-status {
+	display: inline-block;
+	margin-left: 0.6em;
+	padding: 0.2em 0.45em;
+}
+.sqtwc-setup__input-status--warning {
+	color: #8a2424;
+	background: #fcf0f1;
+}
+.sqtwc-setup__input-status--muted {
+	color: #646970;
+}
+@media (max-width: 640px) {
+	.sqtwc-device-chooser__cards {
+		grid-template-columns: 1fr;
+	}
+	.sqtwc-setup__input-status {
+		display: block;
+		margin: 0.5em 0 0;
+	}
+}
+
 /* Result of Check for readers / Create Device Code / Validate Settings. */
 .sqtwc-admin__status:empty {
 	display: none;
