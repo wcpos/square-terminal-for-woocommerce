@@ -54,14 +54,14 @@
 		});
 	}
 
-	function bind(buttonId, action, onSuccess) {
+	function bind(buttonId, action, onSuccess, statusId) {
 		var button = document.getElementById(buttonId);
 		if (!button) {
 			return;
 		}
 
 		button.addEventListener('click', function () {
-			var status = document.getElementById('sqtwc-admin-status');
+			var status = document.getElementById(statusId || 'sqtwc-admin-status');
 			button.disabled = true;
 			setStatus(status, strings.working || 'Working…', false);
 
@@ -163,9 +163,20 @@
 		}
 
 		var base = link.getAttribute('href');
+		var radios = document.querySelectorAll('input[name="woocommerce_sqtwc_collection_method"]');
+
+		function selectedMode() {
+			for (var i = 0; i < radios.length; i++) {
+				if (radios[i].checked) { return radios[i].value; }
+			}
+			return 'terminal';
+		}
 
 		function sync() {
-			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value));
+			// Connect is a link, not a submit: unsaved form state would be lost
+			// across the OAuth round-trip, so the link carries it and the
+			// connect handler persists it (environment and device choice alike).
+			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value) + '&collection_method=' + encodeURIComponent(selectedMode()));
 
 			// The label has to move with the link. Updating only the URL would
 			// leave the button reading "sandbox" while starting a production
@@ -176,6 +187,7 @@
 		}
 
 		select.addEventListener('change', sync);
+		for (var i = 0; i < radios.length; i++) { radios[i].addEventListener('change', sync); }
 		sync();
 	}
 
@@ -321,6 +333,11 @@
 		bind('sqtwc-validate-settings', 'sqtwc_validate_settings', function () {
 			return strings.settingsOk || 'Square credentials and location verified.';
 		});
+		// Reader mode hides the Terminal pairing row, so the checklist carries
+		// its own connection check wired to the same validation action.
+		bind('sqtwc-pos-validate-settings', 'sqtwc_validate_settings', function () {
+			return strings.settingsOk || 'Square credentials and location verified.';
+		}, 'sqtwc-pos-validate-status');
 	}
 
 	if (document.readyState === 'loading') {

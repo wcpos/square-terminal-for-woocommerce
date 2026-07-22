@@ -203,6 +203,17 @@ final class Plugin {
 			Settings::reset_cache();
 		}
 
+		// Same reasoning for the device chooser: a merchant who picks Square
+		// Reader and immediately follows the checklist to Connect would lose
+		// the unsaved radio choice across the OAuth round-trip.
+		$collection_method = $this->requested_collection_method();
+		if ( '' !== $collection_method && Settings::get_collection_method() !== $collection_method ) {
+			$settings                      = (array) get_option( 'woocommerce_sqtwc_settings', array() );
+			$settings['collection_method'] = $collection_method;
+			update_option( 'woocommerce_sqtwc_settings', $settings );
+			Settings::reset_cache();
+		}
+
 		if ( '' === SquareOAuth::client_id() ) {
 			$this->redirect_to_settings( 'sqtwc_connect_failed' );
 			return;
@@ -266,6 +277,16 @@ final class Plugin {
 		$requested = isset( $_GET['environment'] ) ? sanitize_text_field( wp_unslash( $_GET['environment'] ) ) : '';
 
 		return in_array( $requested, array( 'sandbox', 'production' ), true ) ? $requested : '';
+	}
+
+	/**
+	 * Return the collection method carried on the Connect link, if valid.
+	 */
+	private function requested_collection_method(): string {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Nonce verified by guard_admin_redirect().
+		$requested = isset( $_GET['collection_method'] ) ? sanitize_text_field( wp_unslash( $_GET['collection_method'] ) ) : '';
+
+		return in_array( $requested, array( 'terminal', 'pos_app' ), true ) ? $requested : '';
 	}
 
 	/**
