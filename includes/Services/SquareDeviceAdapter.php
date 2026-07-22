@@ -100,12 +100,10 @@ final class SquareDeviceAdapter {
 	}
 
 	/**
-	 * List Terminals Square reports on the account, however they were paired.
+	 * List devices Square reports through the monitoring Devices API.
 	 *
-	 * This is the monitoring Devices API, not the Terminal API. It answers
-	 * "what hardware does Square know about?", which is what makes an empty
-	 * pairing list explicable — a Terminal paired through another application
-	 * appears here but is not selectable for checkouts.
+	 * This API reports devices signed in with Terminal API Device Codes. It does
+	 * not expose Terminals signed in through Square POS or Square Dashboard.
 	 *
 	 * `Device.id` is a monitoring identifier and is NOT valid as a Terminal
 	 * checkout `device_id`; it is deliberately not returned as `id` here.
@@ -120,10 +118,37 @@ final class SquareDeviceAdapter {
 	 * @return array<int,array{monitoring_id:string,name:string,model:string,status:string,type:string}>
 	 */
 	public function list_account_devices( string $location_id ): array {
+		$codes_request          = new ListCodesRequest(
+			array(
+				'locationId'  => $location_id,
+				'productType' => 'TERMINAL_API',
+				'status'      => 'PAIRED',
+			)
+		);
+		$paired_device_code_ids = array();
+		foreach ( $this->client->devices->codes->list( $codes_request ) as $code ) {
+			$device_code_id = (string) $code->getId();
+			if (
+				'PAIRED' === $code->getStatus()
+				&& 'TERMINAL_API' === $code->getProductType()
+				&& $location_id === $code->getLocationId()
+				&& '' !== $device_code_id
+			) {
+				$paired_device_code_ids[ $device_code_id ] = true;
+			}
+		}
+
 		$request = new ListDevicesRequest( array( 'locationId' => $location_id ) );
 		$devices = array();
 
 		foreach ( $this->client->devices->list( $request ) as $device ) {
+			foreach ( $device->getComponents() ?? array() as $component ) {
+				$application = $component->getApplicationDetails();
+				if ( $application && isset( $paired_device_code_ids[ (string) $application->getDeviceCodeId() ] ) ) {
+					continue 2;
+				}
+			}
+
 			$attributes = $device->getAttributes();
 			$status     = $device->getStatus();
 

@@ -137,4 +137,17 @@ final class AdminUiTest extends TestCase {
 		self::assertNotSame( '', (string) $localized['data']['nonce'] );
 		self::assertStringContainsString( 'admin-ajax.php', (string) $localized['data']['ajaxUrl'] );
 	}
+
+	public function test_account_device_messages_explain_the_discovery_limit(): void {
+		$this->on_gateway_settings_screen();
+
+		( new Gateway() )->enqueue_admin_assets();
+
+		$strings = $GLOBALS['sqtwc_localized_scripts']['sqtwc-admin']['data']['strings'];
+		foreach ( array( 'noneAtAll', 'accountNote' ) as $key ) {
+			self::assertStringContainsString( 'Square POS', $strings[ $key ] );
+			self::assertStringContainsString( 'Square Dashboard', $strings[ $key ] );
+			self::assertStringContainsString( 'Create Device Code', $strings[ $key ] );
+		}
+	}
 }

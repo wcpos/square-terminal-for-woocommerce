@@ -7,8 +7,10 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\CreateDeviceCodeRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Codes\Requests\ListCodesRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Devices\Requests\ListDevicesRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Component;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Device;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceAttributes;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceComponentDetailsApplicationDetails;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceStatus;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Locations\Requests\GetLocationsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\CreateDeviceCodeResponse;
@@ -115,6 +117,50 @@ final class SquareDeviceAdapterTest extends TestCase {
 		// ID — sending it to Terminal Checkout fails every payment.
 		self::assertArrayNotHasKey( 'id', $result[0] );
 		self::assertSame( 'device:monitoring-1', $result[0]['monitoring_id'] );
+	}
+
+	public function test_list_account_devices_excludes_plugin_paired_device_codes(): void {
+		$codes               = new SpyCodesClient();
+		$codes->listed_codes = array(
+			new DeviceCode( array( 'id' => 'code_paired', 'deviceId' => 'device_paired', 'productType' => 'TERMINAL_API', 'locationId' => 'LOC', 'status' => 'PAIRED' ) ),
+		);
+		$spy                 = new SpyDevicesClient( $codes );
+		$spy->listed_devices = array(
+			new Device(
+				array(
+					'id'         => 'device:paired',
+					'attributes' => new DeviceAttributes( array( 'type' => 'TERMINAL', 'manufacturer' => 'Square', 'model' => 'Terminal', 'name' => 'Paired' ) ),
+					'components' => array(
+						new Component(
+							array(
+								'type'               => 'APPLICATION',
+								'applicationDetails' => new DeviceComponentDetailsApplicationDetails( array( 'applicationType' => 'TERMINAL_API', 'deviceCodeId' => 'code_paired' ) ),
+							)
+						),
+					),
+				)
+			),
+			new Device(
+				array(
+					'id'         => 'device:other',
+					'attributes' => new DeviceAttributes( array( 'type' => 'TERMINAL', 'manufacturer' => 'Square', 'model' => 'Terminal', 'name' => 'Other' ) ),
+					'components' => array(
+						new Component(
+							array(
+								'type'               => 'APPLICATION',
+								'applicationDetails' => new DeviceComponentDetailsApplicationDetails( array( 'applicationType' => 'TERMINAL_API', 'deviceCodeId' => 'code_other' ) ),
+							)
+						),
+					),
+				)
+			),
+		);
+		$client              = (object) array( 'devices' => $spy );
+
+		$result = ( new SquareDeviceAdapter( $client ) )->list_account_devices( 'LOC' );
+
+		self::assertCount( 1, $result );
+		self::assertSame( 'device:other', $result[0]['monitoring_id'] );
 	}
 
 	public function test_create_device_code_uses_typed_request(): void {

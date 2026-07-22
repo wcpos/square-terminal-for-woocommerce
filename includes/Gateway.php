@@ -81,8 +81,8 @@ class Gateway extends \WC_Payment_Gateway {
 					'pairedTitle'  => __( 'Paired with this plugin — selectable at checkout', 'square-terminal-for-woocommerce' ),
 					'accountTitle' => __( 'Other Terminals on this Square account', 'square-terminal-for-woocommerce' ),
 					'nonePaired'   => __( 'No Terminals are paired with this plugin yet. Use Create Device Code to pair one.', 'square-terminal-for-woocommerce' ),
-					'noneAtAll'    => __( 'Square reports no Terminals at this location.', 'square-terminal-for-woocommerce' ),
-					'accountNote'  => __( 'These are visible to Square but were paired elsewhere, so they cannot be selected at checkout until paired with this plugin.', 'square-terminal-for-woocommerce' ),
+					'noneAtAll'    => __( 'No other Terminal API devices were found. This check cannot find Terminals signed in through Square POS or Square Dashboard. Use Create Device Code to pair a Terminal with this plugin.', 'square-terminal-for-woocommerce' ),
+					'accountNote'  => __( 'This check only lists devices signed in with a Terminal API Device Code. It cannot find Terminals signed in through Square POS or Square Dashboard. Use Create Device Code to pair a Terminal with this plugin.', 'square-terminal-for-woocommerce' ),
 					/* translators: 1: number of Terminals paired with this plugin, 2: number of other Terminals on the account. */
 					'readersFound' => __( 'Found %1$d paired and %2$d other Terminal(s).', 'square-terminal-for-woocommerce' ),
 				),
