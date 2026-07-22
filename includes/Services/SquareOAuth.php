@@ -33,6 +33,9 @@ final class SquareOAuth {
 	/** Transient holding an in-flight authorization attempt. */
 	private const PENDING_TRANSIENT = 'sqtwc_oauth_pending';
 
+	/** Option rotated to invalidate every in-flight authorization attempt. */
+	private const ATTEMPT_GENERATION_OPTION = 'sqtwc_oauth_attempt_generation';
+
 	/** How long an authorization attempt may stay in flight, in seconds. */
 	private const PENDING_TTL = 900;
 
@@ -172,6 +175,7 @@ final class SquareOAuth {
 				'verifier'    => $verifier,
 				'state'       => $state,
 				'environment' => $environment,
+				'generation'  => (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ),
 			),
 			self::PENDING_TTL
 		);
@@ -189,6 +193,9 @@ final class SquareOAuth {
 	public function complete( string $code, string $state ): void {
 		$pending = get_transient( self::PENDING_TRANSIENT . '_' . hash( 'sha256', $state ) );
 		if ( ! is_array( $pending ) || '' === (string) ( $pending['verifier'] ?? '' ) ) {
+			throw new RuntimeException( 'This connection attempt expired. Start again.' );
+		}
+		if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
 			throw new RuntimeException( 'This connection attempt expired. Start again.' );
 		}
 
@@ -258,6 +265,7 @@ final class SquareOAuth {
 	 */
 	public function disconnect(): void {
 		delete_option( self::OPTION );
+		update_option( self::ATTEMPT_GENERATION_OPTION, self::create_verifier() );
 		delete_transient( self::PENDING_TRANSIENT );
 		Logger::info( 'Square OAuth connection removed' );
 	}

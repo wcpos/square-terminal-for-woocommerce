@@ -190,14 +190,24 @@ final class SquareOAuthTest extends TestCase {
 		self::assertIsArray( get_transient( 'sqtwc_oauth_pending_' . hash( 'sha256', 'state-two' ) ) );
 	}
 
-	public function test_disconnect_clears_the_connection_and_any_pending_attempt(): void {
+	#[RunInSeparateProcess]
+	#[PreserveGlobalState( false )]
+	public function test_disconnect_invalidates_every_pending_attempt(): void {
+		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
+		OAuthTestClientFactory::$exception = new RuntimeException( 'Token exchange was reached.' );
 		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ] = array( 'access_token' => 'token' );
-		set_transient( 'sqtwc_oauth_pending', array( 'verifier' => 'v', 'state' => 's' ), 900 );
+		$GLOBALS['sqtwc_remote_post_response']          = array(
+			'body' => wp_json_encode( array( 'authorize_url' => 'https://square.test/connect', 'state' => 'pending-state' ) ),
+		);
+		$oauth = new SquareOAuth( new OAuthTestClientFactory() );
+		$oauth->begin( 'https://store.test/callback', 'sandbox' );
 
-		( new SquareOAuth() )->disconnect();
+		$oauth->disconnect();
 
 		self::assertFalse( SquareOAuth::is_connected() );
-		self::assertFalse( get_transient( 'sqtwc_oauth_pending' ) );
+		$this->expectExceptionMessage( 'This connection attempt expired. Start again.' );
+
+		$oauth->complete( 'code', 'pending-state' );
 	}
 
 	public function test_refresh_without_a_connection_is_refused(): void {
