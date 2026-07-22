@@ -36,6 +36,9 @@ final class SquareOAuth {
 	/** Option rotated to invalidate every in-flight authorization attempt. */
 	private const ATTEMPT_GENERATION_OPTION = 'sqtwc_oauth_attempt_generation';
 
+	/** Reserved OrderLock ID for OAuth connection state transitions. */
+	private const CONNECTION_LOCK_ID = 0;
+
 	/** How long an authorization attempt may stay in flight, in seconds. */
 	private const PENDING_TTL = 900;
 
@@ -49,13 +52,22 @@ final class SquareOAuth {
 	 */
 	private SquareClientFactory $clients;
 
+	/** @var callable(callable):void */
+	private $connection_transition;
+
 	/**
 	 * Constructor.
 	 *
-	 * @param SquareClientFactory|null $clients Optional injected factory.
+	 * @param SquareClientFactory|null $clients               Optional injected factory.
+	 * @param callable|null            $connection_transition Optional injected connection-state transition.
 	 */
-	public function __construct( ?SquareClientFactory $clients = null ) {
+	public function __construct( ?SquareClientFactory $clients = null, ?callable $connection_transition = null ) {
 		$this->clients = $clients ?? new SquareClientFactory();
+		$lock          = new OrderLock();
+
+		$this->connection_transition = $connection_transition ?? static function ( callable $callback ) use ( $lock ): void {
+			$lock->with_lock( self::CONNECTION_LOCK_ID, $callback );
+		};
 	}
 
 	/**
@@ -220,10 +232,15 @@ final class SquareOAuth {
 			)
 		);
 
-		if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
-			throw new RuntimeException( 'This connection attempt expired. Start again.' );
-		}
-		$this->store( $response, $environment );
+		$transition = $this->connection_transition;
+		$transition(
+			function () use ( $pending, $response, $environment ): void {
+				if ( (string) ( $pending['generation'] ?? '' ) !== (string) get_option( self::ATTEMPT_GENERATION_OPTION, '' ) ) {
+					throw new RuntimeException( 'This connection attempt expired. Start again.' );
+				}
+				$this->store( $response, $environment );
+			}
+		);
 	}
 
 	/**
@@ -267,10 +284,15 @@ final class SquareOAuth {
 	 * access token is left to expire.
 	 */
 	public function disconnect(): void {
-		delete_option( self::OPTION );
-		update_option( self::ATTEMPT_GENERATION_OPTION, self::create_verifier() );
-		delete_transient( self::PENDING_TRANSIENT );
-		Logger::info( 'Square OAuth connection removed' );
+		$transition = $this->connection_transition;
+		$transition(
+			static function (): void {
+				delete_option( self::OPTION );
+				update_option( self::ATTEMPT_GENERATION_OPTION, self::create_verifier() );
+				delete_transient( self::PENDING_TRANSIENT );
+				Logger::info( 'Square OAuth connection removed' );
+			}
+		);
 	}
 
 	/**

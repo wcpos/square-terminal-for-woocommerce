@@ -216,27 +216,47 @@ final class SquareOAuthTest extends TestCase {
 
 	#[RunInSeparateProcess]
 	#[PreserveGlobalState( false )]
-	public function test_disconnect_while_the_token_exchange_is_in_flight_prevents_persistence(): void {
+	public function test_disconnect_after_the_final_generation_check_prevents_persistence(): void {
 		class_alias( OAuthTestClientFactory::class, SquareClientFactory::class );
-		OAuthTestClientFactory::$response = $this->tokenResponse();
 		$GLOBALS['sqtwc_remote_post_response'] = array(
 			'body' => wp_json_encode( array( 'authorize_url' => 'https://square.test/connect', 'state' => 'pending-state' ) ),
 		);
-		$oauth = new SquareOAuth( new OAuthTestClientFactory() );
-		$oauth->begin( 'https://store.test/callback', 'sandbox' );
-		OAuthTestClientFactory::$after_obtain_token = static function () use ( $oauth ): void {
-			$oauth->disconnect();
+		$locked     = false;
+		$queued     = null;
+		$transition = static function ( callable $callback ) use ( &$locked, &$queued ): void {
+			if ( $locked ) {
+				$queued = $callback;
+
+				return;
+			}
+			$locked = true;
+			try {
+				$callback();
+			} finally {
+				$locked = false;
+			}
+			if ( $queued ) {
+				$callback = $queued;
+				$queued   = null;
+				$callback();
+			}
 		};
+		$oauth      = new SquareOAuth( new OAuthTestClientFactory(), $transition );
+		$disconnect = new SquareOAuth( null, $transition );
+		$response   = $this->createMock( ObtainTokenResponse::class );
+		$response->method( 'getAccessToken' )->willReturnCallback(
+			static function () use ( $disconnect ): string {
+				$disconnect->disconnect();
 
-		$exception = null;
-		try {
-			$oauth->complete( 'code', 'pending-state' );
-		} catch ( RuntimeException $caught ) {
-			$exception = $caught;
-		}
+				return 'access-token';
+			}
+		);
+		$response->method( 'getRefreshToken' )->willReturn( 'refresh-token' );
+		OAuthTestClientFactory::$response = $response;
+		$oauth->begin( 'https://store.test/callback', 'sandbox' );
 
-		self::assertInstanceOf( RuntimeException::class, $exception );
-		self::assertSame( 'This connection attempt expired. Start again.', $exception->getMessage() );
+		$oauth->complete( 'code', 'pending-state' );
+
 		self::assertFalse( SquareOAuth::is_connected() );
 	}
 
