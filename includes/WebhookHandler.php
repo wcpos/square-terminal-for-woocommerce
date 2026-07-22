@@ -98,15 +98,15 @@ final class WebhookHandler {
 		// A delivery verified under a previous environment, URL or signature key
 		// tells the merchant nothing about the current one — and would mask
 		// exactly the broken setup this row exists to reveal.
-		if ( is_array( $last ) ) {
-			if ( ( $last['fingerprint'] ?? null ) !== self::configuration_fingerprint() ) {
-				return null;
-			}
-
-			$last = $last['at'] ?? null;
+		//
+		// 0.6.0 stored a bare timestamp with no fingerprint, so its records
+		// cannot be attributed to any configuration and are treated as unknown
+		// rather than as current health.
+		if ( ! is_array( $last ) || ( $last['fingerprint'] ?? null ) !== self::configuration_fingerprint() ) {
+			return null;
 		}
 
-		return is_numeric( $last ) ? (int) $last : null;
+		return is_numeric( $last['at'] ?? null ) ? (int) $last['at'] : null;
 	}
 
 	/**

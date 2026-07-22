@@ -59,6 +59,16 @@ final class AdminUiTest extends TestCase {
 		self::assertStringContainsString( 'validate_settings', $js );
 	}
 
+	public function test_admin_js_keeps_the_connect_label_and_link_in_step(): void {
+		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
+
+		// Updating the URL alone would leave the button reading "sandbox" while
+		// starting a production authorization — worse than the original bug.
+		self::assertStringContainsString( 'sqtwc-connect-link', $js );
+		self::assertStringContainsString( 'connectLabel', $js );
+		self::assertStringContainsString( 'textContent', $js );
+	}
+
 	public function test_admin_js_binds_buttons_and_sends_the_nonce(): void {
 		$js = file_get_contents( dirname( __DIR__, 2 ) . '/assets/js/admin.js' ) ?: '';
 

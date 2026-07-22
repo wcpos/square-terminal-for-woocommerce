@@ -166,6 +166,13 @@
 
 		function sync() {
 			link.setAttribute('href', base + '&environment=' + encodeURIComponent(select.value));
+
+			// The label has to move with the link. Updating only the URL would
+			// leave the button reading "sandbox" while starting a production
+			// authorization — worse than the bug this whole thing fixes.
+			if (strings.connectLabel) {
+				link.textContent = strings.connectLabel.replace('%s', select.value);
+			}
 		}
 
 		select.addEventListener('change', sync);

@@ -152,6 +152,16 @@ final class SettingsLayoutTest extends TestCase {
 		self::assertStringContainsString( 'No verified webhook received yet', Gateway::render_webhook_status() );
 	}
 
+	public function test_a_legacy_health_record_is_not_treated_as_current(): void {
+		// 0.6.0 stored a bare timestamp with no fingerprint, so it cannot be
+		// attributed to any configuration. Trusting it would carry stale health
+		// across the upgrade and mask a broken key or URL.
+		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = time() - 60;
+
+		self::assertNull( WebhookHandler::last_verified_delivery() );
+		self::assertStringContainsString( 'No verified webhook received yet', Gateway::render_webhook_status() );
+	}
+
 	public function test_health_does_not_survive_a_change_of_environment(): void {
 		$this->record_verified_delivery( time() - 120 );
 
