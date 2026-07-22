@@ -26,7 +26,7 @@ if ( ! function_exists( 'plugin_dir_url' ) ) { function plugin_dir_url( $file ) 
 if ( ! function_exists( 'trailingslashit' ) ) { function trailingslashit( $path ) { return rtrim( $path, '/\\' ) . '/'; } }
 if ( ! function_exists( 'add_action' ) ) { function add_action( $hook, $callback, $priority = 10, $args = 1 ) { $GLOBALS['sqtwc_actions'][$hook][] = $callback; return true; } }
 if ( ! function_exists( 'add_filter' ) ) { function add_filter( $hook, $callback, $priority = 10, $args = 1 ) { $GLOBALS['sqtwc_filters'][$hook][] = $callback; return true; } }
-if ( ! function_exists( 'apply_filters' ) ) { function apply_filters( $hook, $value ) { return $value; } }
+if ( ! function_exists( 'apply_filters' ) ) { function apply_filters( $hook, $value ) { return array_key_exists( $hook, $GLOBALS['sqtwc_filter_overrides'] ?? array() ) ? $GLOBALS['sqtwc_filter_overrides'][$hook] : $value; } }
 if ( ! function_exists( 'register_rest_route' ) ) { function register_rest_route( $namespace, $route, $args = array() ) { $GLOBALS['sqtwc_rest_routes'][$namespace . $route] = $args; return true; } }
 if ( ! function_exists( 'register_activation_hook' ) ) { function register_activation_hook( $file, $callback ) { $GLOBALS['sqtwc_activation_hook'] = array( $file, $callback ); } }
 if ( ! function_exists( 'register_deactivation_hook' ) ) { function register_deactivation_hook( $file, $callback ) { $GLOBALS['sqtwc_deactivation_hook'] = array( $file, $callback ); } }
@@ -59,6 +59,17 @@ if ( ! function_exists( 'wp_register_script' ) ) { function wp_register_script( 
 if ( ! function_exists( 'wp_enqueue_script' ) ) { function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $args = array() ) { $GLOBALS['sqtwc_enqueued_scripts'][] = $handle; return true; } }
 if ( ! function_exists( 'wp_localize_script' ) ) { function wp_localize_script( $handle, $object_name, $l10n ) { $GLOBALS['sqtwc_localized_scripts'][$handle] = array( 'object' => $object_name, 'data' => $l10n ); return true; } }
 if ( ! function_exists( 'wp_register_style' ) ) { function wp_register_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_registered_styles'][$handle] = $src; return true; } }
+if ( ! function_exists( 'add_query_arg' ) ) { function add_query_arg( $args, $url = '' ) { $sep = str_contains( (string) $url, '?' ) ? '&' : '?'; return $url . $sep . http_build_query( (array) $args ); } }
+// Redirect stubs throw so the exit() that follows them in production code is
+// never reached under PHPUnit, which would otherwise kill the test run.
+class SQTWC_Redirect extends \RuntimeException {}
+if ( ! function_exists( 'wp_redirect' ) ) { function wp_redirect( $location, $status = 302 ) { $GLOBALS['sqtwc_redirects'][] = $location; throw new SQTWC_Redirect( (string) $location ); } }
+if ( ! function_exists( 'wp_safe_redirect' ) ) { function wp_safe_redirect( $location, $status = 302 ) { $GLOBALS['sqtwc_redirects'][] = $location; throw new SQTWC_Redirect( (string) $location ); } }
+if ( ! function_exists( 'wp_die' ) ) { function wp_die( $message = '', $title = '', $args = array() ) { throw new \RuntimeException( 'wp_die: ' . (string) $message ); } }
+if ( ! function_exists( 'wp_remote_post' ) ) { function wp_remote_post( $url, $args = array() ) { $GLOBALS['sqtwc_remote_posts'][] = array( 'url' => $url, 'args' => $args ); return $GLOBALS['sqtwc_remote_post_response'] ?? array( 'body' => '', 'response' => array( 'code' => 200 ) ); } }
+if ( ! function_exists( 'wp_remote_retrieve_body' ) ) { function wp_remote_retrieve_body( $response ) { return is_array( $response ) ? (string) ( $response['body'] ?? '' ) : ''; } }
+if ( ! function_exists( 'is_wp_error' ) ) { function is_wp_error( $thing ) { return $thing instanceof \WP_Error; } }
+if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; public function __construct( $code = '', $message = '' ) { $this->message = (string) $message; } } }
 // Stands in for the official WooCommerce Square plugin's global accessor.
 if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
 class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }

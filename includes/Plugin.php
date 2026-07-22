@@ -13,6 +13,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 
 /**
@@ -68,6 +69,9 @@ final class Plugin {
 		add_action( 'wp_ajax_sqtwc_create_device_code', array( $this, 'ajax_create_device_code' ) );
 		add_action( 'wp_ajax_sqtwc_validate_settings', array( $this, 'ajax_validate_settings' ) );
 		add_action( 'wp_ajax_sqtwc_list_devices', array( $this, 'ajax_list_devices' ) );
+		add_action( 'admin_post_sqtwc_square_connect', array( $this, 'handle_square_connect' ) );
+		add_action( 'admin_post_sqtwc_square_callback', array( $this, 'handle_square_callback' ) );
+		add_action( 'admin_post_sqtwc_square_disconnect', array( $this, 'handle_square_disconnect' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		$this->create_payment_sweeper()->register();
@@ -162,6 +166,107 @@ final class Plugin {
 		} catch ( Throwable $exception ) {
 			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
 		}
+	}
+
+	/**
+	 * Start a Square OAuth authorization.
+	 */
+	public function handle_square_connect(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_connect' );
+
+		try {
+			$url = ( new SquareOAuth() )->begin( self::square_callback_url(), Settings::get_environment() );
+		} catch ( Throwable $exception ) {
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
+
+		wp_redirect( $url );
+		exit;
+	}
+
+	/**
+	 * Receive the authorization response forwarded back to this site.
+	 */
+	public function handle_square_callback(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_callback' );
+
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Nonce verified above; these are Square's response parameters.
+		$code  = isset( $_GET['code'] ) ? sanitize_text_field( wp_unslash( $_GET['code'] ) ) : '';
+		$state = isset( $_GET['state'] ) ? sanitize_text_field( wp_unslash( $_GET['state'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( '' === $code ) {
+			$this->redirect_to_settings( 'sqtwc_connect_declined' );
+			return;
+		}
+
+		try {
+			( new SquareOAuth() )->complete( $code, $state );
+		} catch ( Throwable $exception ) {
+			Logger::error( 'Square OAuth exchange failed', array( 'detail' => $exception->getMessage() ) );
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
+
+		$this->redirect_to_settings( 'sqtwc_connected' );
+	}
+
+	/**
+	 * Forget the stored Square connection.
+	 */
+	public function handle_square_disconnect(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_disconnect' );
+
+		( new SquareOAuth() )->disconnect();
+		$this->redirect_to_settings( 'sqtwc_disconnected' );
+	}
+
+	/**
+	 * Return the admin URL Square's response is forwarded back to.
+	 */
+	public static function square_callback_url(): string {
+		return add_query_arg(
+			array(
+				'action'   => 'sqtwc_square_callback',
+				'_wpnonce' => wp_create_nonce( 'sqtwc_square_callback' ),
+			),
+			admin_url( 'admin-post.php' )
+		);
+	}
+
+	/**
+	 * Refuse an admin redirect request that is not authorized.
+	 *
+	 * @param string $action Nonce action.
+	 */
+	private function guard_admin_redirect( string $action ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Verified on the next line.
+		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
+
+		if ( ! current_user_can( 'manage_woocommerce' ) || ! wp_verify_nonce( $nonce, $action ) ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'square-terminal-for-woocommerce' ), '', array( 'response' => 403 ) );
+		}
+	}
+
+	/**
+	 * Return to the gateway settings screen with a result notice.
+	 *
+	 * @param string $notice Notice key.
+	 */
+	private function redirect_to_settings( string $notice ): void {
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'          => 'wc-settings',
+					'tab'           => 'checkout',
+					'section'       => 'sqtwc',
+					'sqtwc_notice'  => $notice,
+				),
+				admin_url( 'admin.php' )
+			)
+		);
+		exit;
 	}
 
 	/**
