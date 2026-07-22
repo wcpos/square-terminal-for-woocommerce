@@ -798,24 +798,20 @@ class Gateway extends \WC_Payment_Gateway {
 	 * webhooks work. The URL is shown to copy into Square, not to type.
 	 */
 	public static function render_webhook_status(): string {
-		$last = WebhookHandler::last_delivery();
+		$last = WebhookHandler::last_verified_delivery();
 
 		if ( null === $last ) {
+			// Only verified deliveries are recorded, so "none yet" also covers a
+			// signature key that does not match — hence naming it here rather than
+			// reporting a rejection this route cannot attribute to Square.
 			$state   = 'info';
-			$message = __( 'No webhook received yet. This is normal until the first Terminal payment.', 'square-terminal-for-woocommerce' );
-		} elseif ( $last['verified'] ) {
+			$message = __( 'No verified webhook received yet. Normal before the first Terminal payment. If payments have already run, check the Webhook Signature Key under Advanced settings matches your Square Developer Dashboard.', 'square-terminal-for-woocommerce' );
+		} else {
 			$state   = 'ok';
 			$message = sprintf(
 				/* translators: %s: human-readable time difference, for example "5 mins". */
-				__( 'Working. Last webhook received %s ago and verified.', 'square-terminal-for-woocommerce' ),
-				human_time_diff( $last['at'], time() )
-			);
-		} else {
-			$state   = 'error';
-			$message = sprintf(
-				/* translators: %s: human-readable time difference, for example "5 mins". */
-				__( 'Square is sending webhooks but the signature was rejected %s ago. Check the Webhook Signature Key below matches the one in your Square Developer Dashboard.', 'square-terminal-for-woocommerce' ),
-				human_time_diff( $last['at'], time() )
+				__( 'Last webhook received and verified %s ago.', 'square-terminal-for-woocommerce' ),
+				human_time_diff( $last, time() )
 			);
 		}
 

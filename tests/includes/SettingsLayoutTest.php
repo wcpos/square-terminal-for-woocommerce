@@ -116,35 +116,37 @@ final class SettingsLayoutTest extends TestCase {
 	public function test_webhook_status_reports_that_nothing_has_arrived_yet(): void {
 		$html = Gateway::render_webhook_status();
 
-		self::assertStringContainsString( 'No webhook received yet', $html );
+		self::assertStringContainsString( 'No verified webhook received yet', $html );
 		self::assertStringContainsString( 'sqtwc-webhook--info', $html );
 	}
 
 	public function test_webhook_status_reports_a_verified_delivery(): void {
-		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = array(
-			'at'       => time() - 120,
-			'verified' => true,
-		);
+		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = time() - 120;
 
 		$html = Gateway::render_webhook_status();
 
-		self::assertStringContainsString( 'Working', $html );
+		self::assertStringContainsString( 'received and verified', $html );
 		self::assertStringContainsString( 'sqtwc-webhook--ok', $html );
 	}
 
-	public function test_webhook_status_names_the_signature_key_when_deliveries_are_rejected(): void {
+	public function test_an_unverified_caller_cannot_make_the_screen_claim_webhooks_are_broken(): void {
+		// The webhook route is public, so only verified deliveries are recorded.
+		// Anything an unauthenticated caller could write must not be reportable.
 		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = array(
 			'at'       => time() - 60,
 			'verified' => false,
 		);
 
+		self::assertNull( WebhookHandler::last_verified_delivery() );
+		self::assertStringContainsString( 'No verified webhook received yet', Gateway::render_webhook_status() );
+	}
+
+	public function test_no_verified_delivery_names_the_signature_key(): void {
 		$html = Gateway::render_webhook_status();
 
-		// Square delivering while the site refuses is the common misconfiguration,
-		// and is otherwise completely invisible to the merchant.
-		self::assertStringContainsString( 'signature was rejected', $html );
+		// A key mismatch shows up as the absence of any verified delivery, so the
+		// actionable hint belongs in that state.
 		self::assertStringContainsString( 'Webhook Signature Key', $html );
-		self::assertStringContainsString( 'sqtwc-webhook--error', $html );
 	}
 
 	public function test_the_webhook_url_is_shown_read_only_rather_than_asked_for(): void {

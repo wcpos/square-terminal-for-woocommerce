@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file. Release notes f
 ### Changed
 
 - **The settings screen is reorganised around setting the plugin up.** Connect to Square now appears near the top, above the fields it makes unnecessary — previously the screen asked for an access token before offering the button that replaces it. Fields are grouped as Square account, Terminal, and Checkout behaviour, and manual credentials and webhook plumbing moved into a collapsed **Advanced settings** section.
-- **Webhooks report whether they are working** instead of asking for a URL. The plugin serves the webhook route, so it knows the URL: it is now shown read-only to copy into Square rather than typed. The row reports whether a webhook has ever arrived, when, and whether its signature verified — a rejected signature is the common misconfiguration and was previously invisible. A URL override remains under Advanced for sites whose public URL differs from the one WordPress derives.
+- **Webhooks report whether they are working** instead of asking for a URL. The plugin serves the webhook route, so it knows the URL: it is now shown read-only to copy into Square rather than typed. The row reports when a signature-verified webhook last arrived, or names the Webhook Signature Key when none has — a key mismatch looks exactly like an absence of verified deliveries. Only verified deliveries are recorded, since the route is public and an unauthenticated caller must not be able to write the health state. A URL override remains under Advanced for sites whose public URL differs from the one WordPress derives.
 - The Enable setting refers to **WCPOS** rather than "WooCommerce POS".
 
 ### Fixed

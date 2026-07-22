@@ -45,40 +45,34 @@ final class WebhookHandler {
 		$this->order_lock = $order_lock ?? new OrderLock();
 	}
 
-	/** Option recording the most recent webhook delivery. */
+	/** Option recording the most recent signature-verified webhook. */
 	public const LAST_DELIVERY_OPTION = 'sqtwc_webhook_last_delivery';
 
 	/**
-	 * Record the outcome of the most recent delivery from Square.
+	 * Record that a signature-verified webhook arrived.
 	 *
-	 * @param bool $verified Whether the signature verified.
+	 * Only verified deliveries are recorded, because this route is public: an
+	 * unauthenticated caller must not be able to write the health state that the
+	 * settings screen reports.
 	 */
-	private static function record_delivery( bool $verified ): void {
-		update_option(
-			self::LAST_DELIVERY_OPTION,
-			array(
-				'at'       => time(),
-				'verified' => $verified,
-			),
-			false
-		);
+	private static function record_verified_delivery(): void {
+		update_option( self::LAST_DELIVERY_OPTION, time(), false );
 	}
 
 	/**
-	 * Return the most recent delivery outcome.
+	 * Return when a signature-verified webhook last arrived.
 	 *
-	 * @return array{at:int,verified:bool}|null Null when nothing has arrived.
+	 * @return int|null Unix time, or null when none has ever verified.
 	 */
-	public static function last_delivery(): ?array {
+	public static function last_verified_delivery(): ?int {
 		$last = get_option( self::LAST_DELIVERY_OPTION, null );
-		if ( ! is_array( $last ) || ! isset( $last['at'] ) ) {
-			return null;
+
+		// Tolerates the 0.6.0 development shape, which stored an array.
+		if ( is_array( $last ) ) {
+			$last = ! empty( $last['verified'] ) ? ( $last['at'] ?? null ) : null;
 		}
 
-		return array(
-			'at'       => (int) $last['at'],
-			'verified' => ! empty( $last['verified'] ),
-		);
+		return is_numeric( $last ) ? (int) $last : null;
 	}
 
 	/**
@@ -93,18 +87,17 @@ final class WebhookHandler {
 		$signature = (string) ( $headers['x-square-hmacsha256-signature'] ?? '' );
 
 		if ( ! $this->verifier->verify( $body, $signature, Settings::get_webhook_signature_key(), Settings::get_webhook_notification_url() ) ) {
-			// Recorded so the settings screen can answer "are webhooks working?".
-			// A rejected signature is the common misconfiguration and is otherwise
-			// invisible: Square keeps delivering and the site keeps refusing.
-			self::record_delivery( false );
-
 			return array(
 				'status' => 401,
 				'error'  => __( 'Invalid signature.', 'square-terminal-for-woocommerce' ),
 			);
 		}
 
-		self::record_delivery( true );
+		// Only verified deliveries are recorded. This route is public, so anyone
+		// could otherwise post a bad signature and make the settings screen claim
+		// webhooks are broken when they are not. A key mismatch still shows,
+		// as the absence of any verified delivery.
+		self::record_verified_delivery();
 
 		$event = json_decode( $body, true );
 		if ( ! is_array( $event ) ) {
