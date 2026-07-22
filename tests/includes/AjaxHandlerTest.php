@@ -133,6 +133,23 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertSame( 403, $result['status'] );
 	}
 
+	public function test_create_checkout_accepts_order_key_when_logged_in_nonce_context_differs(): void {
+		$order                                = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99]          = $order;
+		$GLOBALS['sqtwc_is_user_logged_in']   = true;
+		$GLOBALS['sqtwc_nonce_valid']         = false;
+
+		$result = ( new AjaxHandler( new LifecycleAdapter() ) )->create_terminal_checkout(
+			array(
+				'order_id'  => 99,
+				'device_id' => 'D',
+				'order_key' => 'key',
+			)
+		);
+
+		self::assertSame( 200, $result['status'] );
+	}
+
 	public function test_create_rejects_paid_order_and_active_checkout(): void {
 		$paid                       = new \SQTWC_Test_Order( 99 );
 		$paid->paid                 = true;
