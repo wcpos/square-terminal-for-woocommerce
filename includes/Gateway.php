@@ -927,17 +927,15 @@ class Gateway extends \WC_Payment_Gateway {
 		$connected         = '' !== Settings::get_access_token();
 		$location_selected = '' !== Settings::get_location_id();
 		$application_id    = Settings::get_pos_application_id();
-		$application_ready = 1 === preg_match( '/^sq0idp-/', $application_id );
-		$is_sandbox        = 'sandbox' === Settings::get_environment() && 'pos_app' === Settings::get_collection_method();
+		$application_ready = 1 === preg_match( '/^sq0idp-[\w-]{8,}$/', $application_id );
+		$is_sandbox        = 'sandbox' === Settings::get_environment();
 
 		ob_start();
 		?>
 		<tr valign="top"><td colspan="2" class="forminp"><section class="sqtwc-setup">
 			<h2><?php echo esc_html__( 'Set up your Square Reader', 'square-terminal-for-woocommerce' ); ?></h2>
 			<p class="sqtwc-setup__intro"><?php echo esc_html__( 'Five steps, about ten minutes, and you only ever do this once. Do steps 3 and 4 on this computer with your phone nearby.', 'square-terminal-for-woocommerce' ); ?></p>
-			<?php if ( $is_sandbox ) : ?>
-				<div class="sqtwc-setup__notice"><strong><?php echo esc_html__( 'Test mode is on.', 'square-terminal-for-woocommerce' ); ?></strong> <?php echo esc_html__( 'Square doesn\'t offer a test mode for Reader payments — switch Environment to Live to use the Reader. Your checklist progress is kept.', 'square-terminal-for-woocommerce' ); ?></div>
-			<?php endif; ?>
+			<div id="sqtwc-setup-sandbox-notice" class="sqtwc-setup__notice"<?php echo $is_sandbox ? '' : ' style="display:none"'; ?>><strong><?php echo esc_html__( 'Test mode is on.', 'square-terminal-for-woocommerce' ); ?></strong> <?php echo esc_html__( 'Square doesn\'t offer a test mode for Reader payments — switch Environment to Live to use the Reader. Your checklist progress is kept.', 'square-terminal-for-woocommerce' ); ?></div>
 			<ol class="sqtwc-setup__steps">
 				<li class="sqtwc-setup__step<?php echo esc_attr( $connected ? ' sqtwc-setup__step--done' : '' ); ?>" data-step="1"><span class="sqtwc-setup__number">1</span><div>
 					<header><strong><?php echo esc_html__( 'Connect your Square account', 'square-terminal-for-woocommerce' ); ?></strong><span class="sqtwc-setup__chip<?php echo esc_attr( $connected ? ' sqtwc-setup__chip--done' : '' ); ?>"><?php echo esc_html( $connected ? __( 'Done', 'square-terminal-for-woocommerce' ) : __( 'To do', 'square-terminal-for-woocommerce' ) ); ?></span></header>

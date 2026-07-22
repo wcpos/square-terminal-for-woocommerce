@@ -268,6 +268,20 @@
 		sync();
 	}
 
+	/** Keep the checklist's test-mode banner honest before the form is saved. */
+	function trackSandboxNotice() {
+		var select = document.getElementById('woocommerce_sqtwc_environment');
+		var notice = document.getElementById('sqtwc-setup-sandbox-notice');
+		if (!select || !notice) { return; }
+
+		function sync() {
+			notice.style.display = select.value === 'sandbox' ? '' : 'none';
+		}
+
+		select.addEventListener('change', sync);
+		sync();
+	}
+
 	function validateApplicationId() {
 		var input = document.getElementById('woocommerce_sqtwc_pos_application_id');
 		var status = document.getElementById('sqtwc-pos-application-status');
@@ -277,7 +291,7 @@
 			var value = input.value.trim();
 			status.className = 'sqtwc-setup__input-status';
 			if (!value) { status.textContent = ''; return; }
-			if (value.indexOf('sq0idp-') === 0) {
+			if (/^sq0idp-[\w-]{8,}$/.test(value)) {
 				status.textContent = strings.applicationIdValid || '✓ That looks right';
 				status.className += ' sqtwc-setup__input-status--ok';
 			} else if (value.indexOf('sandbox-') === 0) {
@@ -295,6 +309,7 @@
 
 	function init() {
 		trackEnvironment();
+		trackSandboxNotice();
 		trackDeviceMode();
 		validateApplicationId();
 		bindCopyWebhook();
