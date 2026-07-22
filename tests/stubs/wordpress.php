@@ -6,6 +6,10 @@ $GLOBALS['sqtwc_rest_routes'] = array();
 $GLOBALS['sqtwc_notices'] = array();
 $GLOBALS['sqtwc_cron_events'] = array();
 $GLOBALS['sqtwc_transients'] = array();
+if ( ! defined( 'MINUTE_IN_SECONDS' ) ) { define( 'MINUTE_IN_SECONDS', 60 ); }
+if ( ! defined( 'HOUR_IN_SECONDS' ) ) { define( 'HOUR_IN_SECONDS', 3600 ); }
+if ( ! defined( 'DAY_IN_SECONDS' ) ) { define( 'DAY_IN_SECONDS', 86400 ); }
+if ( ! defined( 'WEEK_IN_SECONDS' ) ) { define( 'WEEK_IN_SECONDS', 604800 ); }
 if ( ! function_exists( 'wp_json_encode' ) ) { function wp_json_encode( $data ) { return json_encode( $data ); } }
 if ( ! function_exists( 'wp_generate_uuid4' ) ) { function wp_generate_uuid4() { return '00000000-0000-4000-8000-000000000000'; } }
 if ( ! function_exists( 'wp_unslash' ) ) { function wp_unslash( $value ) { return $value; } }
