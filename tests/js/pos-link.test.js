@@ -23,7 +23,7 @@ function posDom() {
 function config() {
 	return {
 		collectionMethod: 'pos_app',
-		posApplicationId: 'sq0idp-app',
+		posApplicationId: 'sq0idp-AbCdEf1234567890_-xyZA',
 		posCallbackUrl: 'https://store.test/wp-json/sqtwc/v1/pos-callback',
 		posLocationId: 'LOC',
 		amount: 1234,
@@ -54,7 +54,7 @@ test('builds exact Android Square POS intent URL', () => {
 	assert.equal(state, '{"o":99,"k":"order-key"}');
 	assert.equal(
 		payment.buildAndroidPosUrl(Object.assign({}, cfg, { state: state, fallbackUrl: 'https://store.test/checkout/order-pay/99/' })),
-		'intent:#Intent;action=com.squareup.pos.action.CHARGE;package=com.squareup;S.browser_fallback_url=https%3A%2F%2Fstore.test%2Fcheckout%2Forder-pay%2F99%2F;S.com.squareup.pos.WEB_CALLBACK_URI=https%3A%2F%2Fstore.test%2Fwp-json%2Fsqtwc%2Fv1%2Fpos-callback;S.com.squareup.pos.CLIENT_ID=sq0idp-app;S.com.squareup.pos.API_VERSION=v2.0;i.com.squareup.pos.TOTAL_AMOUNT=1234;S.com.squareup.pos.CURRENCY_CODE=USD;S.com.squareup.pos.TENDER_TYPES=com.squareup.pos.TENDER_CARD;S.com.squareup.pos.LOCATION_ID=LOC;S.com.squareup.pos.REQUEST_METADATA=%7B%22o%22%3A99%2C%22k%22%3A%22order-key%22%7D;S.com.squareup.pos.NOTE=Order%20%2399;l.com.squareup.pos.AUTO_RETURN_TIMEOUT_MS=3200;end'
+		'intent:#Intent;action=com.squareup.pos.action.CHARGE;package=com.squareup;S.browser_fallback_url=https%3A%2F%2Fstore.test%2Fcheckout%2Forder-pay%2F99%2F;S.com.squareup.pos.WEB_CALLBACK_URI=https%3A%2F%2Fstore.test%2Fwp-json%2Fsqtwc%2Fv1%2Fpos-callback;S.com.squareup.pos.CLIENT_ID=sq0idp-AbCdEf1234567890_-xyZA;S.com.squareup.pos.API_VERSION=v2.0;i.com.squareup.pos.TOTAL_AMOUNT=1234;S.com.squareup.pos.CURRENCY_CODE=USD;S.com.squareup.pos.TENDER_TYPES=com.squareup.pos.TENDER_CARD;S.com.squareup.pos.LOCATION_ID=LOC;S.com.squareup.pos.REQUEST_METADATA=%7B%22o%22%3A99%2C%22k%22%3A%22order-key%22%7D;S.com.squareup.pos.NOTE=Order%20%2399;l.com.squareup.pos.AUTO_RETURN_TIMEOUT_MS=3200;end'
 	);
 });
 
