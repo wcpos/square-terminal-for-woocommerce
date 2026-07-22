@@ -7,6 +7,8 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal;
 
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
+
 /**
  * Memoized settings wrapper.
  */
@@ -67,9 +69,24 @@ final class Settings {
 
 	/**
 	 * Return the active access token for the configured environment.
+	 *
+	 * An OAuth connection takes precedence, but only for the environment it was
+	 * authorized against — a sandbox connection must never be used to authorize
+	 * production requests. Manually configured tokens continue to work exactly
+	 * as before for sites that have not connected.
 	 */
 	public static function get_access_token(): string {
-		if ( 'production' === self::get_environment() ) {
+		$environment = self::get_environment();
+		$connection  = SquareOAuth::connection();
+
+		if (
+			( $connection['environment'] ?? '' ) === $environment
+			&& '' !== (string) ( $connection['access_token'] ?? '' )
+		) {
+			return (string) $connection['access_token'];
+		}
+
+		if ( 'production' === $environment ) {
 			return (string) self::get( 'production_access_token', '' );
 		}
 

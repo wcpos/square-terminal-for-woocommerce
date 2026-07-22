@@ -13,6 +13,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 
 /**
@@ -57,6 +58,7 @@ final class Plugin {
 	public function init(): void {
 		add_filter( 'woocommerce_payment_gateways', array( Gateway::class, 'register_gateway' ) );
 		add_action( 'admin_enqueue_scripts', array( Gateway::class, 'enqueue_admin_assets' ) );
+		add_action( 'admin_notices', array( $this, 'render_square_notice' ) );
 		add_action( 'wp_ajax_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_nopriv_sqtwc_create_terminal_checkout', array( $this, 'ajax_create_terminal_checkout' ) );
 		add_action( 'wp_ajax_sqtwc_get_terminal_status', array( $this, 'ajax_get_terminal_status' ) );
@@ -68,6 +70,9 @@ final class Plugin {
 		add_action( 'wp_ajax_sqtwc_create_device_code', array( $this, 'ajax_create_device_code' ) );
 		add_action( 'wp_ajax_sqtwc_validate_settings', array( $this, 'ajax_validate_settings' ) );
 		add_action( 'wp_ajax_sqtwc_list_devices', array( $this, 'ajax_list_devices' ) );
+		add_action( 'admin_post_sqtwc_square_connect', array( $this, 'handle_square_connect' ) );
+		add_action( 'admin_post_sqtwc_square_callback', array( $this, 'handle_square_callback' ) );
+		add_action( 'admin_post_sqtwc_square_disconnect', array( $this, 'handle_square_disconnect' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		$this->create_payment_sweeper()->register();
@@ -162,6 +167,134 @@ final class Plugin {
 		} catch ( Throwable $exception ) {
 			$this->send_ajax_response( $this->mapped_admin_error_response( $exception ) );
 		}
+	}
+
+	/**
+	 * Start a Square OAuth authorization.
+	 */
+	public function handle_square_connect(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_connect' );
+		if ( '' === SquareOAuth::client_id() ) {
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
+
+		try {
+			$url = ( new SquareOAuth() )->begin( self::square_callback_url(), Settings::get_environment() );
+		} catch ( Throwable $exception ) {
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
+
+		wp_redirect( $url );
+		exit;
+	}
+
+	/**
+	 * Receive the authorization response forwarded back to this site.
+	 */
+	public function handle_square_callback(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_callback' );
+
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended -- Nonce verified above; these are Square's response parameters.
+		$code  = isset( $_GET['code'] ) ? sanitize_text_field( wp_unslash( $_GET['code'] ) ) : '';
+		$state = isset( $_GET['state'] ) ? sanitize_text_field( wp_unslash( $_GET['state'] ) ) : '';
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( '' === $code ) {
+			$this->redirect_to_settings( 'sqtwc_connect_declined' );
+			return;
+		}
+
+		try {
+			( new SquareOAuth() )->complete( $code, $state );
+		} catch ( Throwable $exception ) {
+			Logger::error( 'Square OAuth exchange failed', array( 'detail' => $exception->getMessage() ) );
+			$this->redirect_to_settings( 'sqtwc_connect_failed' );
+			return;
+		}
+
+		$this->redirect_to_settings( 'sqtwc_connected' );
+	}
+
+	/**
+	 * Forget the stored Square connection.
+	 */
+	public function handle_square_disconnect(): void {
+		$this->guard_admin_redirect( 'sqtwc_square_disconnect' );
+
+		( new SquareOAuth() )->disconnect();
+		$this->redirect_to_settings( 'sqtwc_disconnected' );
+	}
+
+	/**
+	 * Return the admin URL Square's response is forwarded back to.
+	 */
+	public static function square_callback_url(): string {
+		return add_query_arg(
+			array(
+				'action'   => 'sqtwc_square_callback',
+				'_wpnonce' => wp_create_nonce( 'sqtwc_square_callback' ),
+			),
+			admin_url( 'admin-post.php' )
+		);
+	}
+
+	/**
+	 * Refuse an admin redirect request that is not authorized.
+	 *
+	 * @param string $action Nonce action.
+	 */
+	private function guard_admin_redirect( string $action ): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Verified on the next line.
+		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) ) : '';
+
+		if ( ! current_user_can( 'manage_woocommerce' ) || ! wp_verify_nonce( $nonce, $action ) ) {
+			wp_die( esc_html__( 'You are not allowed to do that.', 'square-terminal-for-woocommerce' ), '', array( 'response' => 403 ) );
+		}
+	}
+
+	/**
+	 * Return to the gateway settings screen with a result notice.
+	 *
+	 * @param string $notice Notice key.
+	 */
+	private function redirect_to_settings( string $notice ): void {
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'page'          => 'wc-settings',
+					'tab'           => 'checkout',
+					'section'       => 'sqtwc',
+					'sqtwc_notice'  => $notice,
+				),
+				admin_url( 'admin.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Render the result of a Square connection redirect.
+	 */
+	public function render_square_notice(): void {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only result of an admin redirect.
+		$notice = isset( $_GET['sqtwc_notice'] ) ? sanitize_text_field( wp_unslash( $_GET['sqtwc_notice'] ) ) : '';
+		$notices = array(
+			'sqtwc_connected'        => array( 'success', __( 'Square account connected.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_disconnected'     => array( 'success', __( 'Square account disconnected.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_connect_declined' => array( 'error', __( 'Square connection was cancelled.', 'square-terminal-for-woocommerce' ) ),
+			'sqtwc_connect_failed'   => array( 'error', __( 'Could not connect to Square. Please try again.', 'square-terminal-for-woocommerce' ) ),
+		);
+		if ( ! isset( $notices[ $notice ] ) ) {
+			return;
+		}
+
+		printf(
+			'<div class="notice notice-%1$s is-dismissible"><p>%2$s</p></div>',
+			esc_attr( $notices[ $notice ][0] ),
+			esc_html( $notices[ $notice ][1] )
+		);
 	}
 
 	/**
@@ -371,12 +504,20 @@ final class Plugin {
 			? $posted_environment
 			: Settings::get_environment();
 
-		$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
 		$location_id  = sanitize_text_field( (string) ( $request['location_id'] ?? '' ) );
+		$connection = SquareOAuth::connection();
+		if ( ( $connection['environment'] ?? '' ) === $environment && '' !== (string) ( $connection['access_token'] ?? '' ) ) {
+			$access_token = (string) ( $connection['access_token'] ?? '' );
+		} else {
+			$access_token = sanitize_text_field( (string) ( $request['access_token'] ?? '' ) );
+			if ( '' === $access_token ) {
+				$access_token = (string) Settings::get( $environment . '_access_token', '' );
+			}
+		}
 
 		return array(
 			'environment'  => $environment,
-			'access_token' => '' !== $access_token ? $access_token : (string) Settings::get( $environment . '_access_token', '' ),
+			'access_token' => $access_token,
 			'location_id'  => '' !== $location_id ? $location_id : Settings::get_location_id(),
 		);
 	}

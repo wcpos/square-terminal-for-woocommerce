@@ -11,6 +11,7 @@ use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareOAuth;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\WooCommerceSquareHints;
 
 /**
@@ -445,8 +446,18 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$this->form_fields = array(
 			'enabled'                  => array(
-				'title' => __( 'Enable', 'square-terminal-for-woocommerce' ),
-				'type'  => 'checkbox',
+				'title'       => __( 'Enable/Disable', 'square-terminal-for-woocommerce' ),
+				'type'        => 'checkbox',
+				// This setting governs the online store only. WooCommerce POS uses
+				// the gateway once it is configured, whether or not it is enabled
+				// here, and a bare "Enable" implied the POS needed it too.
+				'label'       => sprintf(
+					/* translators: %s: link to WooCommerce POS. */
+					__( 'Enable Square Terminal for web checkout (not necessary for %s)', 'square-terminal-for-woocommerce' ),
+					'<a href="https://wcpos.com" target="_blank">WooCommerce POS</a>'
+				),
+				'description' => __( 'This enables the gateway for online store checkout. The POS uses this gateway automatically when configured.', 'square-terminal-for-woocommerce' ),
+				'default'     => 'no',
 			),
 			'environment'              => array(
 				'title'       => __( 'Environment', 'square-terminal-for-woocommerce' ),
@@ -492,6 +503,10 @@ class Gateway extends \WC_Payment_Gateway {
 				'title'       => __( 'Webhook Notification URL', 'square-terminal-for-woocommerce' ),
 				'type'        => 'text',
 				'description' => __( 'Must exactly match the URL configured in Square Developer Dashboard.', 'square-terminal-for-woocommerce' ),
+			),
+			'square_connection'        => array(
+				'title' => __( 'Square connection', 'square-terminal-for-woocommerce' ),
+				'type'  => 'square_connection',
 			),
 			'terminal_pairing'         => array(
 				'title' => __( 'Terminal pairing', 'square-terminal-for-woocommerce' ),
@@ -715,6 +730,93 @@ class Gateway extends \WC_Payment_Gateway {
 	 *
 	 * WooCommerce resolves a field's `type` to `generate_{type}_html()`, so this
 	 * is what puts render_admin_fields() on the gateway settings screen.
+	 *
+	 * @param string              $key  Field key.
+	 * @param array<string,mixed> $data Field definition.
+	 * @return string
+	 */
+	public function generate_square_connection_html( $key, $data ): string {
+		unset( $key );
+
+		// The row is absent entirely until a WCPOS Square application is
+		// configured, so an unfinished flow can never appear on a live site.
+		if ( '' === SquareOAuth::client_id() ) {
+			return '';
+		}
+
+		return sprintf(
+			'<tr valign="top"><th scope="row" class="titledesc">%1$s</th><td class="forminp">%2$s</td></tr>',
+			esc_html( isset( $data['title'] ) ? (string) $data['title'] : '' ),
+			self::render_connection_controls()
+		);
+	}
+
+	/**
+	 * Render the Connect / Disconnect controls and current connection state.
+	 */
+	public static function render_connection_controls(): string {
+		$connection = SquareOAuth::connection();
+
+		// A rotation that could not be completed clears the stored tokens, since
+		// Square's PKCE refresh tokens are single use and retrying a spent one
+		// cannot succeed. Without this the row would silently revert to "Connect"
+		// and leave the merchant with no idea why the connection lapsed.
+		if ( ! empty( $connection['reconnect_required'] ) ) {
+			return sprintf(
+				'<p><strong>%1$s</strong></p><p class="description">%2$s</p>'
+				. '<p><a class="button button-primary" href="%3$s">%4$s</a></p>',
+				esc_html__( 'Reconnect to Square required', 'square-terminal-for-woocommerce' ),
+				esc_html__( 'The Square authorization could not be renewed, so it was ended rather than left in an unusable state. Terminal payments will not work until this site is reconnected.', 'square-terminal-for-woocommerce' ),
+				esc_url( self::connection_action_url( 'sqtwc_square_connect' ) ),
+				esc_html__( 'Reconnect to Square', 'square-terminal-for-woocommerce' )
+			);
+		}
+
+		if ( SquareOAuth::is_connected() ) {
+			$merchant = (string) ( $connection['merchant_id'] ?? '' );
+
+			return sprintf(
+				'<p><strong>%1$s</strong></p><p class="description">%2$s</p>'
+				. '<p><a class="button" href="%3$s">%4$s</a></p>',
+				esc_html__( 'Connected to Square', 'square-terminal-for-woocommerce' ),
+				esc_html(
+					sprintf(
+						/* translators: 1: Square environment, 2: Square merchant ID. */
+						__( 'Environment: %1$s. Merchant: %2$s.', 'square-terminal-for-woocommerce' ),
+						(string) ( $connection['environment'] ?? '' ),
+						'' !== $merchant ? $merchant : __( 'unknown', 'square-terminal-for-woocommerce' )
+					)
+				),
+				esc_url( self::connection_action_url( 'sqtwc_square_disconnect' ) ),
+				esc_html__( 'Disconnect', 'square-terminal-for-woocommerce' )
+			);
+		}
+
+		return sprintf(
+			'<p><a class="button button-primary" href="%1$s">%2$s</a></p><p class="description">%3$s</p>',
+			esc_url( self::connection_action_url( 'sqtwc_square_connect' ) ),
+			esc_html__( 'Connect to Square', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Authorize this site with Square instead of pasting an access token. The access token below is only needed if you are not connected.', 'square-terminal-for-woocommerce' )
+		);
+	}
+
+	/**
+	 * Build a nonce-protected admin-post URL for a connection action.
+	 *
+	 * @param string $action Admin-post action name.
+	 */
+	private static function connection_action_url( string $action ): string {
+		return add_query_arg(
+			array(
+				'action'   => $action,
+				'_wpnonce' => wp_create_nonce( $action ),
+			),
+			admin_url( 'admin-post.php' )
+		);
+	}
+
+	/**
+	 * Render the pairing controls as a WooCommerce settings row.
 	 *
 	 * @param string              $key  Field key.
 	 * @param array<string,mixed> $data Field definition.
