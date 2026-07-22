@@ -747,6 +747,21 @@ class Gateway extends \WC_Payment_Gateway {
 	public static function render_connection_controls(): string {
 		$connection = SquareOAuth::connection();
 
+		// A rotation that could not be completed clears the stored tokens, since
+		// Square's PKCE refresh tokens are single use and retrying a spent one
+		// cannot succeed. Without this the row would silently revert to "Connect"
+		// and leave the merchant with no idea why the connection lapsed.
+		if ( ! empty( $connection['reconnect_required'] ) ) {
+			return sprintf(
+				'<p><strong>%1$s</strong></p><p class="description">%2$s</p>'
+				. '<p><a class="button button-primary" href="%3$s">%4$s</a></p>',
+				esc_html__( 'Reconnect to Square required', 'square-terminal-for-woocommerce' ),
+				esc_html__( 'The Square authorization could not be renewed, so it was ended rather than left in an unusable state. Terminal payments will not work until this site is reconnected.', 'square-terminal-for-woocommerce' ),
+				esc_url( self::connection_action_url( 'sqtwc_square_connect' ) ),
+				esc_html__( 'Reconnect to Square', 'square-terminal-for-woocommerce' )
+			);
+		}
+
 		if ( SquareOAuth::is_connected() ) {
 			$merchant = (string) ( $connection['merchant_id'] ?? '' );
 

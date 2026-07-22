@@ -158,6 +158,23 @@ final class SquareConnectUiTest extends TestCase {
 		self::assertFalse( SquareOAuth::is_connected() );
 	}
 
+	public function test_a_lapsed_connection_explains_itself_instead_of_reverting_silently(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_oauth_client_id'] = 'sq0idp-test';
+		$GLOBALS['sqtwc_options'][ SquareOAuth::OPTION ]            = array(
+			'access_token'       => '',
+			'refresh_token'      => '',
+			'environment'        => 'production',
+			'reconnect_required' => true,
+		);
+
+		$html = $this->gateway()->generate_square_connection_html( 'square_connection', array( 'title' => 'Square connection' ) );
+
+		// A failed rotation clears the tokens, so without this the row would show
+		// a bare "Connect to Square" and give no clue why the connection ended.
+		self::assertStringContainsString( 'Reconnect to Square required', $html );
+		self::assertStringContainsString( 'could not be renewed', $html );
+	}
+
 	public function test_the_callback_url_is_nonce_protected(): void {
 		$url = Plugin::square_callback_url();
 
