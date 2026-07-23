@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const payment = require('../../assets/js/payment.js');
-const { FakeElement } = require('./helpers');
+const { FakeElement, createClock, createStorage } = require('./helpers');
 
 function posDom() {
 	const root = new FakeElement('div');
@@ -15,9 +15,23 @@ function posDom() {
 	button.setAttribute('data-sqtwc-action', 'pos-open');
 	const status = new FakeElement('div');
 	status.setAttribute('id', 'sqtwc-status');
+	const panel = new FakeElement('div');
+	panel.setAttribute('id', 'sqtwc-log-panel');
+	panel.setAttribute('hidden', 'hidden');
+	const toggle = new FakeElement('button');
+	toggle.setAttribute('data-sqtwc-action', 'log-toggle');
+	const body = new FakeElement('div');
+	body.className = 'sqtwc-payment__log-body';
+	body.setAttribute('hidden', 'hidden');
+	const log = new FakeElement('textarea');
+	log.setAttribute('id', 'sqtwc-log');
+	body.appendChild(log);
+	panel.appendChild(toggle);
+	panel.appendChild(body);
 	root.appendChild(button);
 	root.appendChild(status);
-	return { root: root, button: button, status: status };
+	root.appendChild(panel);
+	return { root: root, button: button, status: status, log: log };
 }
 
 function config() {
@@ -35,6 +49,7 @@ function config() {
 		environment: 'production',
 		strings: {
 			posOpening: 'Opening Square Point of Sale…',
+			posHandoffFailed: 'Square Point of Sale did not open.',
 			posUnsupported: 'Use a supported mobile device.',
 			posProductionRequired: 'Production required.',
 			posCanceled: 'Payment was canceled.',
@@ -112,4 +127,148 @@ test('desktop shows unsupported message and disables handoff', () => {
 	payment.createController({ root: dom.root, config: config(), userAgent: 'Windows', maxTouchPoints: 0, location: { search: '' }, navigate: function () {} });
 	assert.equal(dom.status.textContent, 'Use a supported mobile device.');
 	assert.equal(dom.button.disabled, true);
+});
+
+test('visible page reports a failed handoff after 2500ms and re-enables the button', () => {
+	const dom = posDom();
+	const clock = createClock();
+	payment.createController({
+		root: dom.root,
+		config: config(),
+		doc: { hidden: false, addEventListener: function () {} },
+		userAgent: 'Android',
+		location: { search: '', href: 'https://store.test/order-pay/99/' },
+		navigate: function () {},
+		setTimeout: clock.setTimeout,
+		clearTimeout: clock.clearTimeout
+	}).handleAction('pos-open');
+
+	assert.equal(clock.lastDelay(), 2500);
+	clock.runNext();
+	assert.equal(dom.button.disabled, false);
+	assert.equal(dom.status.textContent, 'Square Point of Sale did not open.');
+	assert.match(dom.log.value, /\[ERROR\].*handoff failed/i);
+});
+
+test('handoff log redacts request metadata without changing the navigation URL', () => {
+	['Android WebView', 'iPhone'].forEach(function (userAgent) {
+		const dom = posDom();
+		const navigations = [];
+		const controller = payment.createController({
+			root: dom.root,
+			config: config(),
+			doc: { hidden: false, addEventListener: function () {} },
+			sessionStorage: createStorage(),
+			userAgent: userAgent,
+			location: { search: '?sqtwc_pos_result=error&sqtwc_pos_code=no_network', href: 'https://store.test/order-pay/99/' },
+			navigate: function (url) { navigations.push(url); },
+			setTimeout: function () { return 1; },
+			clearTimeout: function () {}
+		});
+
+		controller.handleAction('pos-open');
+		assert.match(dom.log.value, /POS platform:/);
+		assert.match(dom.log.value, /sqtwc_pos_result=error.*sqtwc_pos_code=no_network/i);
+		assert.match(dom.log.value, /\[redacted\]/);
+		assert.doesNotMatch(dom.log.value, /order-key/);
+		assert.match(navigations[0], /order-key/);
+	});
+});
+
+test('watchdog is cancelled when the document hides or pagehide fires', () => {
+	function handoff(cancelEvent) {
+		const dom = posDom();
+		const clock = createClock();
+		const listeners = {};
+		const page = { addEventListener: function (name, fn) { listeners[name] = fn; } };
+		const doc = {
+			hidden: false,
+			defaultView: page,
+			addEventListener: function (name, fn) { listeners[name] = fn; }
+		};
+		const controller = payment.createController({
+			root: dom.root, config: config(), doc: doc, userAgent: 'Android',
+			location: { search: '' }, navigate: function () {},
+			setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout
+		});
+		controller.handleAction('pos-open');
+		if (cancelEvent === 'visibilitychange') { doc.hidden = true; }
+		listeners[cancelEvent]();
+		return clock.pending();
+	}
+
+	assert.equal(handoff('visibilitychange'), 0);
+	assert.equal(handoff('pagehide'), 0);
+});
+
+test('openExternalApp drives the top frame when the page is framed and same-origin', () => {
+	const assigned = [];
+	const top = { location: { href: 'https://store.test/pos', assign: (u) => assigned.push(u) } };
+	const win = { top: top, location: { assign: () => { throw new Error('must not navigate the frame'); } } };
+	win.self = win;
+
+	assert.equal(payment.openExternalApp(win, null, 'intent:#Intent;end'), 'parent-frame');
+	assert.deepEqual(assigned, ['intent:#Intent;end']);
+});
+
+test('openExternalApp escapes a cross-origin frame with a target=_top anchor', () => {
+	const win = { get top() { throw new Error('cross-origin'); }, location: { assign: () => { throw new Error('must not navigate the frame'); } } };
+	win.self = win;
+	const created = [];
+	const doc = {
+		body: { appendChild: (el) => { created.push(el); return el; }, removeChild: () => {} },
+		createElement: () => ({ click() { this.clicked = true; } })
+	};
+
+	assert.equal(payment.openExternalApp(win, doc, 'intent:#Intent;end'), 'anchor-top');
+	assert.equal(created.length, 1);
+	assert.equal(created[0].href, 'intent:#Intent;end');
+	assert.equal(created[0].target, '_top');
+	assert.equal(created[0].clicked, true);
+});
+
+test('openExternalApp navigates directly when the page is not framed', () => {
+	const assigned = [];
+	const win = { location: { assign: (u) => assigned.push(u) } };
+	win.top = win;
+	win.self = win;
+
+	assert.equal(payment.openExternalApp(win, null, 'square-commerce-v1://payment/create'), 'top-frame');
+	assert.deepEqual(assigned, ['square-commerce-v1://payment/create']);
+});
+
+test('isFramed treats an unreachable parent as framed', () => {
+	assert.equal(payment.isFramed({ self: {}, get top() { throw new Error('cross-origin'); } }), true);
+	const same = {};
+	assert.equal(payment.isFramed({ self: same, top: same }), false);
+});
+
+test('the order-pay submit is hidden while Square is selected and restored when it is not', () => {
+	const dom = posDom();
+	const submit = { style: { display: '' } };
+	const radio = { name: 'payment_method', value: 'sqtwc', checked: true };
+	let changeHandler = null;
+	const doc = {
+		hidden: false,
+		addEventListener: (name, fn) => { if (name === 'change') { changeHandler = fn; } },
+		querySelector: (sel) => {
+			if (sel === '#place_order') { return submit; }
+			if (sel === 'input[name="payment_method"]:checked') { return radio.checked ? radio : null; }
+			if (sel === 'input[name="payment_method"]') { return radio; }
+			return null;
+		}
+	};
+	const cfg = config();
+	cfg.gatewayId = 'sqtwc';
+	payment.createController({
+		root: dom.root, config: cfg, doc: doc, userAgent: 'Android',
+		location: { search: '', href: 'https://store.test/order-pay/99/' },
+		navigate: function () {}, setTimeout: function () { return 1; }, clearTimeout: function () {}
+	});
+
+	assert.equal(submit.style.display, 'none');
+
+	radio.checked = false;
+	changeHandler({ target: { name: 'payment_method' } });
+	assert.equal(submit.style.display, '');
 });

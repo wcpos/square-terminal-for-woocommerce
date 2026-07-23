@@ -67,6 +67,21 @@ final class PaymentFrontendTest extends TestCase {
 		self::assertStringContainsString( 'data-sqtwc-action="log-clear"', $html );
 	}
 
+	public function test_pos_app_ui_renders_debug_log_panel_when_enabled(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'collection_method'   => 'pos_app',
+			'checkout_debug_logs' => 'yes',
+		);
+		Settings::reset_cache_for_tests();
+
+		$html = Gateway::render_payment_ui( 0 );
+
+		self::assertSame( 1, substr_count( $html, 'id="sqtwc-log-panel"' ) );
+		self::assertStringContainsString( 'data-sqtwc-action="log-toggle"', $html );
+		self::assertStringContainsString( 'data-sqtwc-action="log-copy"', $html );
+		self::assertStringContainsString( 'data-sqtwc-action="log-clear"', $html );
+	}
+
 	public function test_payment_js_implements_chained_polling_not_setinterval(): void {
 		$js = file_get_contents( \dirname( __DIR__, 2 ) . '/assets/js/payment.js' ) ?: '';
 
