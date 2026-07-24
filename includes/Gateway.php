@@ -33,6 +33,9 @@ class Gateway extends \WC_Payment_Gateway {
 	 */
 	private const LAST_KNOWN_GOOD_TTL = 86400;
 
+	/** WooCommerce payment gateway id. */
+	public const ID = 'sqtwc';
+
 	/**
 	 * Per-request device lists, keyed by environment and location.
 	 *
@@ -44,7 +47,7 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Gateway constructor.
 	 */
 	public function __construct() {
-		$this->id                 = 'sqtwc';
+		$this->id                 = self::ID;
 		$this->method_title       = __( 'Square Terminal', 'square-terminal-for-woocommerce' );
 		$this->method_description = __( 'Collect in-person payments with Square Terminal.', 'square-terminal-for-woocommerce' );
 		$this->has_fields         = true;
@@ -225,6 +228,7 @@ class Gateway extends \WC_Payment_Gateway {
 				'status' => 'sqtwc_get_terminal_status',
 				'detach' => 'sqtwc_detach_terminal_checkout',
 			),
+			'gatewayId'       => self::ID,
 			'environment'     => $environment,
 			'collectionMethod' => $collection_method,
 			'devices'         => 'terminal' === $collection_method ? self::get_available_devices( $environment ) : array(),
@@ -450,6 +454,7 @@ class Gateway extends \WC_Payment_Gateway {
 			'logClear'           => __( 'Clear', 'square-terminal-for-woocommerce' ),
 			'logCopied'          => __( 'Copied.', 'square-terminal-for-woocommerce' ),
 			'posOpening'         => __( 'Opening Square Point of Sale…', 'square-terminal-for-woocommerce' ),
+			'posHandoffFailed'   => __( 'Square Point of Sale did not open. Check that the app is installed on this device, then try again — or open this payment page in Chrome or Safari.', 'square-terminal-for-woocommerce' ),
 			'posWaiting'         => __( 'Waiting for payment in Square Point of Sale…', 'square-terminal-for-woocommerce' ),
 			'posCanceled'        => __( 'Payment was canceled.', 'square-terminal-for-woocommerce' ),
 			'posNotLoggedIn'     => __( 'Sign in to the Square Point of Sale app and try again.', 'square-terminal-for-woocommerce' ),
@@ -723,8 +728,6 @@ class Gateway extends \WC_Payment_Gateway {
 		}
 
 		$resume_attrs = self::render_resume_attributes( $order );
-		$debug_logs   = 'yes' === Settings::get( 'checkout_debug_logs', 'no' );
-
 		$parts   = array();
 		$parts[] = sprintf(
 			'<div id="sqtwc-payment" class="sqtwc-payment" data-order-id="%1$d"%2$s>',
@@ -767,29 +770,7 @@ class Gateway extends \WC_Payment_Gateway {
 
 		$parts[] = '<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite"></div>';
 
-		if ( $debug_logs ) {
-			$parts[] = '<div id="sqtwc-log-panel" class="sqtwc-payment__log" hidden>';
-			$parts[] = sprintf(
-				'<button type="button" class="sqtwc-payment__log-toggle" data-sqtwc-action="log-toggle" aria-expanded="false">%s</button>',
-				esc_html__( 'Show debug log', 'square-terminal-for-woocommerce' )
-			);
-			$parts[] = '<div class="sqtwc-payment__log-body" hidden>';
-			$parts[] = sprintf(
-				'<label class="screen-reader-text" for="sqtwc-log">%s</label>',
-				esc_html__( 'Checkout debug log', 'square-terminal-for-woocommerce' )
-			);
-			$parts[] = '<textarea id="sqtwc-log" class="sqtwc-payment__log-output" rows="8" readonly></textarea>';
-			$parts[] = '<div class="sqtwc-payment__log-actions">';
-			$parts[] = sprintf(
-				'<button type="button" class="button sqtwc-payment__log-copy" data-sqtwc-action="log-copy">%s</button>',
-				esc_html__( 'Copy', 'square-terminal-for-woocommerce' )
-			);
-			$parts[] = sprintf(
-				'<button type="button" class="button sqtwc-payment__log-clear" data-sqtwc-action="log-clear">%s</button>',
-				esc_html__( 'Clear', 'square-terminal-for-woocommerce' )
-			);
-			$parts[] = '</div></div></div>';
-		}
+		$parts[] = self::render_log_panel();
 
 		$parts[] = '</div>';
 
@@ -802,19 +783,59 @@ class Gateway extends \WC_Payment_Gateway {
 		$amount   = $order ? CurrencyConverter::to_minor_units( $order->get_total(), $currency ) : 0;
 		$blocked  = self::pos_blocked_message( $order );
 
-		return sprintf(
-			'<div id="sqtwc-payment" class="sqtwc-payment" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">'
-			. '<h3 class="sqtwc-payment__heading">%5$s</h3>'
-			. '<div class="sqtwc-payment__actions"><button type="button" id="sqtwc-pos-open" class="button button-primary" data-sqtwc-action="pos-open"%6$s>%7$s</button></div>'
-			. '<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite">%8$s</div></div>',
+		$parts   = array();
+		$parts[] = sprintf(
+			'<div id="sqtwc-payment" class="sqtwc-payment sqtwc-payment--pos" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">',
 			$order_id,
 			esc_attr( $order ? (string) $order->get_order_key() : '' ),
 			$amount,
-			esc_attr( $currency ),
-			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' ),
+			esc_attr( $currency )
+		);
+
+		// The surrounding payment-method radio already names Square on screen,
+		// so the heading is kept for assistive tech only.
+		$parts[] = sprintf(
+			'<h3 class="sqtwc-payment__heading screen-reader-text">%s</h3>',
+			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' )
+		);
+
+		$parts[] = sprintf(
+			'<div class="sqtwc-payment__actions"><button type="button" id="sqtwc-pos-open" class="button sqtwc-payment__primary" data-sqtwc-action="pos-open"%1$s>%2$s</button></div>',
 			'' !== $blocked ? ' disabled' : '',
-			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' )
+		);
+
+		$parts[] = sprintf(
+			'<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite">%s</div>',
 			esc_html( $blocked )
+		);
+
+		$parts[] = self::render_log_panel();
+		$parts[] = '</div>';
+
+		return implode( '', $parts );
+	}
+
+	/** Render the optional cashier debug log panel. */
+	private static function render_log_panel(): string {
+		if ( 'yes' !== Settings::get( 'checkout_debug_logs', 'no' ) ) {
+			return '';
+		}
+
+		return sprintf(
+			'<div id="sqtwc-log-panel" class="sqtwc-payment__log" hidden>'
+			. '<button type="button" class="sqtwc-payment__log-toggle" data-sqtwc-action="log-toggle" aria-expanded="false">%1$s</button>'
+			. '<div class="sqtwc-payment__log-body" hidden>'
+			. '<label class="screen-reader-text" for="sqtwc-log">%2$s</label>'
+			. '<textarea id="sqtwc-log" class="sqtwc-payment__log-output" rows="8" readonly></textarea>'
+			. '<div class="sqtwc-payment__log-actions">'
+			. '<button type="button" class="button sqtwc-payment__log-copy" data-sqtwc-action="log-copy">%3$s</button>'
+			. '<button type="button" class="button sqtwc-payment__log-clear" data-sqtwc-action="log-clear">%4$s</button>'
+			. '</div></div></div>',
+			esc_html__( 'Show debug log', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Checkout debug log', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),
+			esc_html__( 'Clear', 'square-terminal-for-woocommerce' )
 		);
 	}
 

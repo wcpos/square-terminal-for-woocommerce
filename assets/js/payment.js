@@ -38,6 +38,187 @@
 	};
 
 	/**
+	 * Hide the order-pay form's own submit button while this gateway is the
+	 * selected payment method.
+	 *
+	 * WooCommerce always renders a "Pay for order" submit under the payment
+	 * box, but this gateway never completes through it: process_payment just
+	 * redirects back to the same order-pay URL, and both collection methods
+	 * finish elsewhere (Terminal redirects from the poll response, the POS app
+	 * returns through the callback handler). Left visible it is a decoy that
+	 * reloads the page and wipes the status. It is only hidden while our own
+	 * method is selected, so switching to another gateway still submits.
+	 */
+	function createPayButtonGuard(env) {
+		var doc = env.doc;
+		var gatewayId = env.gatewayId;
+		var noop = { sync: function () {} };
+		if (!doc || !doc.querySelector || !gatewayId) {
+			return noop;
+		}
+		// One listener per document however many times the payment box is
+		// rebuilt, and re-resolve the submit on every sync so a replaced form
+		// is not left holding a stale reference.
+		if (doc.addEventListener && !doc.sqtwcPayGuardBound) {
+			doc.sqtwcPayGuardBound = true;
+			doc.addEventListener('change', function (event) {
+				var target = event && event.target;
+				if (target && target.name === 'payment_method') {
+					sync();
+				}
+			});
+		}
+
+		return { sync: sync };
+
+		function sync() {
+			var submit = doc.querySelector('#place_order');
+			if (submit && submit.style) {
+				submit.style.display = selectedMethod() === gatewayId ? 'none' : '';
+			}
+		}
+
+		function selectedMethod() {
+			var checked = doc.querySelector('input[name="payment_method"]:checked');
+			if (checked) {
+				return checked.value;
+			}
+			// A sole gateway can be rendered as a hidden input, which no
+			// :checked selector will ever match.
+			var only = doc.querySelector('input[name="payment_method"][type="hidden"]');
+			if (only) {
+				return only.value;
+			}
+			// Radios are present but none is selected yet.
+			return doc.querySelector('input[name="payment_method"]') ? '' : gatewayId;
+		}
+	}
+
+	/**
+	 * Report whether this page is running inside a frame.
+	 *
+	 * A cross-origin parent can make even the comparison throw, and that case
+	 * is still framed, so a failure is reported as framed rather than assumed
+	 * to be top level.
+	 */
+	function isFramed(win) {
+		try {
+			return !!win && win.top !== win.self;
+		} catch (e) {
+			return true;
+		}
+	}
+
+	/** Return the top window when it is same-origin and reachable, else null. */
+	function reachableTop(win) {
+		if (!win) {
+			return null;
+		}
+		try {
+			if (win.top === win.self) {
+				return win;
+			}
+			// Reading the parent's href is what actually proves same-origin.
+			if (typeof win.top.location.href === 'string') {
+				return win.top;
+			}
+		} catch (e) {
+			// Cross-origin parent: its location is not ours to touch.
+		}
+		return null;
+	}
+
+	/**
+	 * Navigate to an external app URL from a page that may be framed.
+	 *
+	 * Browsers refuse to launch an external protocol (intent: on Android,
+	 * square-commerce-v1: on iOS) from a subframe, so a plain location.assign()
+	 * inside an iframe is dropped with no error — the cashier just sees the
+	 * status sit there. Drive the top frame when it is same-origin and
+	 * reachable; otherwise click a target="_top" anchor, which carries the user
+	 * activation out of the frame. Returns the strategy used, for the log.
+	 */
+	function openExternalApp(win, doc, url) {
+		var top = reachableTop(win);
+		if (top && top.location) {
+			top.location.assign(url);
+			return top === win ? 'top-frame' : 'parent-frame';
+		}
+		if (doc && doc.createElement && doc.body) {
+			var link = doc.createElement('a');
+			link.href = url;
+			link.target = '_top';
+			link.rel = 'noopener';
+			doc.body.appendChild(link);
+			link.click();
+			doc.body.removeChild(link);
+			return 'anchor-top';
+		}
+		if (win && win.location) {
+			win.location.assign(url);
+		}
+		return 'same-frame';
+	}
+
+	function createLogger(env) {
+		var els = env.els;
+		var lines = env.lines;
+		var key = 'sqtwc_log_' + env.orderId;
+
+		function renderLog() {
+			if (els.logOutput) {
+				els.logOutput.value = lines.join('\n');
+			}
+		}
+
+		function log(level, message) {
+			if (!els.logOutput) {
+				return;
+			}
+			lines.push(timestamp() + ' [' + String(level).toUpperCase() + '] ' + message);
+			if (lines.length > 50) {
+				lines.splice(0, lines.length - 50);
+			}
+			renderLog();
+			writeStore(env.sessionStore, key, lines.join('\n'));
+		}
+
+		return {
+			log: log,
+			restore: function () {
+				var stored = readStore(env.sessionStore, key);
+				if (els.logOutput && stored) {
+					Array.prototype.push.apply(lines, stored.split('\n').slice(-50));
+					renderLog();
+				}
+			},
+			bindToggleInitial: function () { showEl(els.logPanel, true); },
+			toggle: function () {
+				if (!els.logBody || !els.logToggle) { return; }
+				var hidden = els.logBody.hasAttribute('hidden');
+				showEl(els.logBody, hidden);
+				els.logToggle.setAttribute('aria-expanded', hidden ? 'true' : 'false');
+				setText(els.logToggle, hidden ? env.strings.logHide : env.strings.logShow);
+			},
+			copy: function () {
+				if (!els.logOutput) { return; }
+				var nav = typeof navigator !== 'undefined' ? navigator : null;
+				if (nav && nav.clipboard && nav.clipboard.writeText) {
+					nav.clipboard.writeText(els.logOutput.value);
+				} else if (els.logOutput.select) {
+					els.logOutput.select();
+					if (env.doc && env.doc.execCommand) { env.doc.execCommand('copy'); }
+				}
+			},
+			clear: function () {
+				lines.splice(0, lines.length);
+				renderLog();
+				removeStore(env.sessionStore, key);
+			}
+		};
+	}
+
+	/**
 	 * Create a payment controller bound to one container element.
 	 *
 	 * @param {Object} env Injected dependencies.
@@ -108,6 +289,15 @@
 			detachAvailable: false,
 			logLines: []
 		};
+		var logger = createLogger({
+			els: els,
+			lines: state.logLines,
+			orderId: orderId,
+			sessionStore: sessionStore,
+			strings: strings,
+			doc: doc
+		});
+		var log = logger.log;
 
 		var controller = {
 			state: state,
@@ -132,8 +322,9 @@
 
 		function init() {
 			populateDevices();
-			restoreLog();
-			bindLogToggleInitial();
+			logger.restore();
+			logger.bindToggleInitial();
+			createPayButtonGuard({ doc: doc, gatewayId: config.gatewayId }).sync();
 
 			var resume = root.getAttribute('data-resume') === '1';
 			if (resume) {
@@ -229,13 +420,13 @@
 					detachPayment();
 					break;
 				case 'log-toggle':
-					toggleLog();
+					logger.toggle();
 					break;
 				case 'log-copy':
-					copyLog();
+					logger.copy();
 					break;
 				case 'log-clear':
-					clearLog();
+					logger.clear();
 					break;
 				default:
 					break;
@@ -681,76 +872,6 @@
 			}
 		}
 
-		// ---- Cashier debug log ------------------------------------------
-
-		function log(level, message) {
-			if (!els.logOutput) {
-				return;
-			}
-			var line = timestamp() + ' [' + String(level).toUpperCase() + '] ' + message;
-			state.logLines.push(line);
-			if (state.logLines.length > 50) {
-				state.logLines = state.logLines.slice(state.logLines.length - 50);
-			}
-			renderLog();
-			writeStore(sessionStore, logStoreKey(), state.logLines.join('\n'));
-		}
-
-		function renderLog() {
-			if (els.logOutput) {
-				els.logOutput.value = state.logLines.join('\n');
-			}
-		}
-
-		function restoreLog() {
-			if (!els.logOutput) {
-				return;
-			}
-			var stored = readStore(sessionStore, logStoreKey());
-			if (stored) {
-				state.logLines = stored.split('\n').slice(-50);
-				renderLog();
-			}
-		}
-
-		function bindLogToggleInitial() {
-			if (els.logPanel) {
-				showEl(els.logPanel, true);
-			}
-		}
-
-		function toggleLog() {
-			if (!els.logBody || !els.logToggle) {
-				return;
-			}
-			var hidden = els.logBody.hasAttribute('hidden');
-			showEl(els.logBody, hidden);
-			els.logToggle.setAttribute('aria-expanded', hidden ? 'true' : 'false');
-			setText(els.logToggle, hidden ? strings.logHide : strings.logShow);
-		}
-
-		function copyLog() {
-			if (!els.logOutput) {
-				return;
-			}
-			var text = els.logOutput.value;
-			var nav = typeof navigator !== 'undefined' ? navigator : null;
-			if (nav && nav.clipboard && nav.clipboard.writeText) {
-				nav.clipboard.writeText(text);
-			} else if (els.logOutput.select) {
-				els.logOutput.select();
-				if (doc && doc.execCommand) {
-					doc.execCommand('copy');
-				}
-			}
-		}
-
-		function clearLog() {
-			state.logLines = [];
-			renderLog();
-			removeStore(sessionStore, logStoreKey());
-		}
-
 		// ---- Helpers ----------------------------------------------------
 
 		function getSelectedDevice() {
@@ -840,10 +961,6 @@
 			return 'sqtwc_last_device';
 		}
 
-		function logStoreKey() {
-			return 'sqtwc_log_' + orderId;
-		}
-
 		function createOption(value, label) {
 			var opt = doc.createElement('option');
 			opt.value = value;
@@ -917,29 +1034,70 @@
 		return 'unsupported';
 	}
 
+	function redactPosUrl(url, platform) {
+		if (platform === 'android') {
+			// The fallback URL is the order-pay address, which carries the order
+			// key as a query parameter, so it needs redacting as much as the
+			// metadata does.
+			return url
+				.replace(/(S\.com\.squareup\.pos\.REQUEST_METADATA=)[^;]*/, '$1[redacted]')
+				.replace(/(S\.browser_fallback_url=)[^;]*/, '$1[redacted]');
+		}
+		var prefix = 'square-commerce-v1://payment/create?data=', data = safeJson(decodeURIComponent(url.slice(prefix.length)));
+		if (data) {
+			data.state = '[redacted]';
+			return prefix + encodeURIComponent(JSON.stringify(data)).replace('%5Bredacted%5D', '[redacted]');
+		}
+		return url;
+	}
+
 	function createPosController(env) {
 		var root = env.root;
 		var config = env.config || {};
 		var strings = config.strings || {};
 		var button = root.querySelector('[data-sqtwc-action="pos-open"]');
 		var status = root.querySelector('#sqtwc-status');
+		var doc = env.doc || (root && root.ownerDocument) || (typeof document !== 'undefined' ? document : null);
+		var page = (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : null);
+		var setTimeoutImpl = env.setTimeout || (typeof setTimeout !== 'undefined' ? setTimeout : null);
+		var clearTimeoutImpl = env.clearTimeout || (typeof clearTimeout !== 'undefined' ? clearTimeout : null);
 		var userAgent = env.userAgent !== undefined ? env.userAgent : (typeof navigator !== 'undefined' ? navigator.userAgent : '');
 		var maxTouchPoints = env.maxTouchPoints !== undefined ? env.maxTouchPoints : (typeof navigator !== 'undefined' ? navigator.maxTouchPoints : 0);
 		var locationRef = env.location || (typeof window !== 'undefined' ? window.location : { search: '' });
 		var navigate = env.navigate || function () {};
 		var platform = detectPosPlatform(userAgent, maxTouchPoints);
+		var params = parseQuery(locationRef.search || '');
+		var watchdogTimer = null;
+		var logger = createLogger({
+			els: {
+				logPanel: root.querySelector('#sqtwc-log-panel'),
+				logToggle: root.querySelector('[data-sqtwc-action="log-toggle"]'),
+				logBody: root.querySelector('.sqtwc-payment__log-body'),
+				logOutput: root.querySelector('#sqtwc-log')
+			},
+			lines: [], orderId: root.getAttribute('data-order-id') || '',
+			sessionStore: env.sessionStorage || null, strings: strings, doc: doc
+		});
 
 		var controller = {
 			handleAction: function (action) {
+				if (action === 'log-toggle') { logger.toggle(); return; }
+				if (action === 'log-copy') { logger.copy(); return; }
+				if (action === 'log-clear') { logger.clear(); return; }
 				if (action !== 'pos-open' || !button || button.disabled) {
 					return;
 				}
-				setPosStatus(strings.posOpening);
+				setPosStatus(strings.posOpening, 'info', true);
 				button.disabled = true;
 				var cfg = copyObject(config);
 				cfg.state = buildPosState(config);
 				cfg.fallbackUrl = String(locationRef.href || '');
-				navigate(platform === 'android' ? buildAndroidPosUrl(cfg) : buildIosPosUrl(cfg));
+				var url = platform === 'android' ? buildAndroidPosUrl(cfg) : buildIosPosUrl(cfg);
+				logger.log('info', 'POS handoff: scheme=' + (platform === 'android' ? 'intent:' : 'square-commerce-v1:') + ', amount=' + config.amount + ', currency=' + config.currency + ', location ID=' + (config.posLocationId ? 'set' : 'not set'));
+				logger.log('info', 'POS handoff URL: ' + redactPosUrl(url, platform));
+				var strategy = navigate(url);
+				logger.log('info', 'Navigation strategy: ' + (strategy || 'unknown'));
+				watchdogTimer = setTimeoutImpl(handoffFailed, 2500);
 			},
 			beaconCancel: function () { return false; }
 		};
@@ -948,36 +1106,46 @@
 		return controller;
 
 		function initPos() {
+			logger.restore();
+			logger.bindToggleInitial();
+			createPayButtonGuard({ doc: doc, gatewayId: config.gatewayId }).sync();
+			logger.log('info', 'POS platform: ' + platform);
+			logger.log('info', 'User agent: ' + userAgent);
+			logger.log('info', 'Framed: ' + (isFramed(page) ? 'yes' : 'no') + ', top frame reachable: ' + (reachableTop(page) ? 'yes' : 'no'));
+			if (params.sqtwc_pos_result || params.sqtwc_pos_code) {
+				logger.log('info', 'POS return: sqtwc_pos_result=' + (params.sqtwc_pos_result || '') + ', sqtwc_pos_code=' + (params.sqtwc_pos_code || ''));
+			}
+			if (doc && doc.addEventListener) { doc.addEventListener('visibilitychange', function () { if (isHidden()) { cancelWatchdog(); } }); }
+			if (page && page.addEventListener) { page.addEventListener('pagehide', cancelWatchdog); }
 			if (config.environment !== 'production') {
 				disable(button, true);
-				setPosStatus(strings.posProductionRequired);
+				setPosStatus(strings.posProductionRequired, 'warning');
 				return;
 			}
 			if (!config.posApplicationId || !config.posLocationId) {
 				disable(button, true);
-				setPosStatus(strings.posMissingConfig);
+				setPosStatus(strings.posMissingConfig, 'warning');
 				return;
 			}
 
-			var params = parseQuery(locationRef.search || '');
 			if (params.sqtwc_pos_result === 'partial') {
 				disable(button, true);
-				setPosStatus(strings.posPartial);
+				setPosStatus(strings.posPartial, 'warning');
 				return;
 			}
 			if (params.sqtwc_pos_result === 'offline') {
 				disable(button, false);
-				setPosStatus(strings.posOffline);
+				setPosStatus(strings.posOffline, 'warning');
 				return;
 			}
 			if (params.sqtwc_pos_result === 'error') {
 				disable(button, false);
-				setPosStatus(posErrorMessage(params.sqtwc_pos_code || ''));
+				setPosStatus(posErrorMessage(params.sqtwc_pos_code || ''), 'error');
 				return;
 			}
 			if (platform === 'unsupported') {
 				disable(button, true);
-				setPosStatus(strings.posUnsupported);
+				setPosStatus(strings.posUnsupported, 'warning');
 			}
 		}
 
@@ -988,10 +1156,26 @@
 			return String(strings.posError || '').replace('%s', code);
 		}
 
-		function setPosStatus(message) {
-			if (status) {
-				setText(status, message || '');
+		function isHidden() { return !!(doc && (doc.hidden || doc.visibilityState === 'hidden')); }
+
+		function cancelWatchdog() {
+			if (watchdogTimer !== null) { clearTimeoutImpl(watchdogTimer); watchdogTimer = null; }
+		}
+
+		function handoffFailed() {
+			watchdogTimer = null;
+			if (isHidden()) { return; }
+			logger.log('error', 'Square POS app handoff failed; payment page remained visible');
+			disable(button, false);
+			setPosStatus(strings.posHandoffFailed, 'error');
+		}
+
+		function setPosStatus(message, severity, busy) {
+			if (!status) {
+				return;
 			}
+			setText(status, message || '');
+			status.className = 'sqtwc-payment__status sqtwc-status--' + (severity || 'info') + (busy ? ' is-busy' : '');
 		}
 	}
 
@@ -1158,7 +1342,11 @@
 				now: function () { return Date.now(); },
 				sessionStorage: safeStorage(win, 'sessionStorage'),
 				localStorage: safeStorage(win, 'localStorage'),
-				navigate: function (url) { if (win && win.location) { win.location.assign(url); } },
+				// The POS handoff targets an external app scheme, which a framed
+				// page cannot launch on its own; ordinary redirects stay in frame.
+				navigate: config.collectionMethod === 'pos_app'
+					? function (url) { return openExternalApp(win, docRef, url); }
+					: function (url) { if (win && win.location) { win.location.assign(url); } },
 				sendBeacon: (win && win.navigator && win.navigator.sendBeacon) ? win.navigator.sendBeacon.bind(win.navigator) : null,
 				userAgent: win && win.navigator ? win.navigator.userAgent : '',
 				maxTouchPoints: win && win.navigator ? win.navigator.maxTouchPoints : 0,
@@ -1216,7 +1404,9 @@
 		buildPosState: buildPosState,
 		buildAndroidPosUrl: buildAndroidPosUrl,
 		buildIosPosUrl: buildIosPosUrl,
-		detectPosPlatform: detectPosPlatform
+		detectPosPlatform: detectPosPlatform,
+		openExternalApp: openExternalApp,
+		isFramed: isFramed
 	};
 
 	if (typeof module === 'object' && module.exports) {

@@ -81,6 +81,45 @@
 	color: #8a1f11;
 }
 
+/*
+ * The single POS-app action carries the whole flow, so it is styled as a real
+ * primary here rather than relying on theme or wp-admin button classes, which
+ * do not apply on the storefront.
+ */
+#sqtwc-payment .sqtwc-payment__primary {
+	flex: 1 1 auto;
+	min-height: 3rem;
+	padding: 0.7em 1.2em;
+	border: 0;
+	border-radius: 4px;
+	background: #2271b1;
+	color: #fff;
+	font-size: 1em;
+	font-weight: 600;
+	line-height: 1.4;
+	text-align: center;
+}
+
+#sqtwc-payment .sqtwc-payment__primary:hover:not([disabled]),
+#sqtwc-payment .sqtwc-payment__primary:focus:not([disabled]) {
+	background: #135e96;
+	color: #fff;
+}
+
+/*
+ * POS mode renders inside the payment-method box of the order-pay form, which
+ * already supplies a border and heading. Drop our own card chrome so the panel
+ * does not read as a box inside a box inside a modal.
+ */
+#sqtwc-payment.sqtwc-payment--pos {
+	max-width: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: none;
+}
+
 /* Honour the hidden attribute even against themes that override display. */
 #sqtwc-payment [hidden] {
 	display: none !important;
