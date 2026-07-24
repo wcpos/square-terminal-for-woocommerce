@@ -272,3 +272,72 @@ test('the order-pay submit is hidden while Square is selected and restored when 
 	changeHandler({ target: { name: 'payment_method' } });
 	assert.equal(submit.style.display, '');
 });
+
+test('the logged intent URL redacts the order key carried by the fallback URL', () => {
+	const dom = posDom();
+	const navigations = [];
+	payment.createController({
+		root: dom.root, config: config(), doc: { hidden: false, addEventListener: function () {} },
+		sessionStorage: createStorage(), userAgent: 'Android',
+		// The real order-pay address carries the order key as a query parameter.
+		location: { search: '', href: 'https://store.test/checkout/order-pay/99/?pay_for_order=true&key=order-key' },
+		navigate: function (url) { navigations.push(url); return 'parent-frame'; },
+		setTimeout: function () { return 1; }, clearTimeout: function () {}
+	}).handleAction('pos-open');
+
+	assert.match(navigations[0], /browser_fallback_url=[^;]*order-key/);
+	assert.doesNotMatch(dom.log.value, /order-key/);
+	assert.match(dom.log.value, /Navigation strategy: parent-frame/);
+});
+
+test('a sole gateway rendered as a hidden input still hides the order-pay submit', () => {
+	const dom = posDom();
+	const submit = { style: { display: '' } };
+	const hidden = { name: 'payment_method', value: 'sqtwc', type: 'hidden' };
+	const doc = {
+		hidden: false,
+		addEventListener: function () {},
+		querySelector: (sel) => {
+			if (sel === '#place_order') { return submit; }
+			if (sel === 'input[name="payment_method"][type="hidden"]') { return hidden; }
+			if (sel === 'input[name="payment_method"]') { return hidden; }
+			return null;
+		}
+	};
+	const cfg = config();
+	cfg.gatewayId = 'sqtwc';
+	payment.createController({
+		root: dom.root, config: cfg, doc: doc, userAgent: 'Android',
+		location: { search: '', href: 'https://store.test/order-pay/99/' },
+		navigate: function () {}, setTimeout: function () { return 1; }, clearTimeout: function () {}
+	});
+
+	assert.equal(submit.style.display, 'none');
+});
+
+test('rebuilt payment panels do not accumulate document change listeners', () => {
+	const submit = { style: { display: '' } };
+	const radio = { name: 'payment_method', value: 'sqtwc', checked: true };
+	let changeListeners = 0;
+	const doc = {
+		hidden: false,
+		addEventListener: (name) => { if (name === 'change') { changeListeners++; } },
+		querySelector: (sel) => {
+			if (sel === '#place_order') { return submit; }
+			if (sel === 'input[name="payment_method"]:checked') { return radio; }
+			if (sel === 'input[name="payment_method"]') { return radio; }
+			return null;
+		}
+	};
+	const cfg = config();
+	cfg.gatewayId = 'sqtwc';
+	for (let i = 0; i < 3; i++) {
+		payment.createController({
+			root: posDom().root, config: cfg, doc: doc, userAgent: 'Android',
+			location: { search: '', href: 'https://store.test/order-pay/99/' },
+			navigate: function () {}, setTimeout: function () { return 1; }, clearTimeout: function () {}
+		});
+	}
+
+	assert.equal(changeListeners, 1);
+});

@@ -783,23 +783,37 @@ class Gateway extends \WC_Payment_Gateway {
 		$amount   = $order ? CurrencyConverter::to_minor_units( $order->get_total(), $currency ) : 0;
 		$blocked  = self::pos_blocked_message( $order );
 
-		return sprintf(
-			'<div id="sqtwc-payment" class="sqtwc-payment sqtwc-payment--pos" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">'
-			// The surrounding payment-method radio already names Square on screen,
-			// so the heading is kept for assistive tech only.
-			. '<h3 class="sqtwc-payment__heading screen-reader-text">%5$s</h3>'
-			. '<div class="sqtwc-payment__actions"><button type="button" id="sqtwc-pos-open" class="button sqtwc-payment__primary" data-sqtwc-action="pos-open"%6$s>%7$s</button></div>'
-			. '<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite">%8$s</div>%9$s</div>',
+		$parts   = array();
+		$parts[] = sprintf(
+			'<div id="sqtwc-payment" class="sqtwc-payment sqtwc-payment--pos" data-order-id="%1$d" data-order-key="%2$s" data-amount="%3$d" data-currency="%4$s">',
 			$order_id,
 			esc_attr( $order ? (string) $order->get_order_key() : '' ),
 			$amount,
-			esc_attr( $currency ),
-			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' ),
-			'' !== $blocked ? ' disabled' : '',
-			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' ),
-			esc_html( $blocked ),
-			self::render_log_panel()
+			esc_attr( $currency )
 		);
+
+		// The surrounding payment-method radio already names Square on screen,
+		// so the heading is kept for assistive tech only.
+		$parts[] = sprintf(
+			'<h3 class="sqtwc-payment__heading screen-reader-text">%s</h3>',
+			esc_html__( 'Square Point of Sale Payment', 'square-terminal-for-woocommerce' )
+		);
+
+		$parts[] = sprintf(
+			'<div class="sqtwc-payment__actions"><button type="button" id="sqtwc-pos-open" class="button sqtwc-payment__primary" data-sqtwc-action="pos-open"%1$s>%2$s</button></div>',
+			'' !== $blocked ? ' disabled' : '',
+			esc_html__( 'Open Square Point of Sale', 'square-terminal-for-woocommerce' )
+		);
+
+		$parts[] = sprintf(
+			'<div id="sqtwc-status" class="sqtwc-payment__status" role="status" aria-live="polite">%s</div>',
+			esc_html( $blocked )
+		);
+
+		$parts[] = self::render_log_panel();
+		$parts[] = '</div>';
+
+		return implode( '', $parts );
 	}
 
 	/** Render the optional cashier debug log panel. */

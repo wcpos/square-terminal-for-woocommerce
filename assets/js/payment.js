@@ -56,12 +56,11 @@
 		if (!doc || !doc.querySelector || !gatewayId) {
 			return noop;
 		}
-		var submit = doc.querySelector('#place_order');
-		if (!submit || !submit.style) {
-			return noop;
-		}
-
-		if (doc.addEventListener) {
+		// One listener per document however many times the payment box is
+		// rebuilt, and re-resolve the submit on every sync so a replaced form
+		// is not left holding a stale reference.
+		if (doc.addEventListener && !doc.sqtwcPayGuardBound) {
+			doc.sqtwcPayGuardBound = true;
 			doc.addEventListener('change', function (event) {
 				var target = event && event.target;
 				if (target && target.name === 'payment_method') {
@@ -73,7 +72,10 @@
 		return { sync: sync };
 
 		function sync() {
-			submit.style.display = selectedMethod() === gatewayId ? 'none' : '';
+			var submit = doc.querySelector('#place_order');
+			if (submit && submit.style) {
+				submit.style.display = selectedMethod() === gatewayId ? 'none' : '';
+			}
 		}
 
 		function selectedMethod() {
@@ -81,7 +83,13 @@
 			if (checked) {
 				return checked.value;
 			}
-			// A single-gateway order-pay form renders no radio to check.
+			// A sole gateway can be rendered as a hidden input, which no
+			// :checked selector will ever match.
+			var only = doc.querySelector('input[name="payment_method"][type="hidden"]');
+			if (only) {
+				return only.value;
+			}
+			// Radios are present but none is selected yet.
 			return doc.querySelector('input[name="payment_method"]') ? '' : gatewayId;
 		}
 	}
@@ -1028,7 +1036,12 @@
 
 	function redactPosUrl(url, platform) {
 		if (platform === 'android') {
-			return url.replace(/(S\.com\.squareup\.pos\.REQUEST_METADATA=)[^;]*/, '$1[redacted]');
+			// The fallback URL is the order-pay address, which carries the order
+			// key as a query parameter, so it needs redacting as much as the
+			// metadata does.
+			return url
+				.replace(/(S\.com\.squareup\.pos\.REQUEST_METADATA=)[^;]*/, '$1[redacted]')
+				.replace(/(S\.browser_fallback_url=)[^;]*/, '$1[redacted]');
 		}
 		var prefix = 'square-commerce-v1://payment/create?data=', data = safeJson(decodeURIComponent(url.slice(prefix.length)));
 		if (data) {
@@ -1082,7 +1095,8 @@
 				var url = platform === 'android' ? buildAndroidPosUrl(cfg) : buildIosPosUrl(cfg);
 				logger.log('info', 'POS handoff: scheme=' + (platform === 'android' ? 'intent:' : 'square-commerce-v1:') + ', amount=' + config.amount + ', currency=' + config.currency + ', location ID=' + (config.posLocationId ? 'set' : 'not set'));
 				logger.log('info', 'POS handoff URL: ' + redactPosUrl(url, platform));
-				navigate(url);
+				var strategy = navigate(url);
+				logger.log('info', 'Navigation strategy: ' + (strategy || 'unknown'));
 				watchdogTimer = setTimeoutImpl(handoffFailed, 2500);
 			},
 			beaconCancel: function () { return false; }
@@ -1331,7 +1345,7 @@
 				// The POS handoff targets an external app scheme, which a framed
 				// page cannot launch on its own; ordinary redirects stay in frame.
 				navigate: config.collectionMethod === 'pos_app'
-					? function (url) { openExternalApp(win, docRef, url); }
+					? function (url) { return openExternalApp(win, docRef, url); }
 					: function (url) { if (win && win.location) { win.location.assign(url); } },
 				sendBeacon: (win && win.navigator && win.navigator.sendBeacon) ? win.navigator.sendBeacon.bind(win.navigator) : null,
 				userAgent: win && win.navigator ? win.navigator.userAgent : '',
