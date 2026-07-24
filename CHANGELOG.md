@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.1] - 2026-07-24
+
+### Fixed
+
+- **The Square POS app now opens from a framed payment page.** Browsers refuse to launch an external protocol from a subframe, so the `intent:` (Android) and `square-commerce-v1:` (iOS) handoff was silently dropped when the payment fields rendered inside an iframe — the status sat at "Opening Square Point of Sale…" forever. The handoff now drives the top frame when it is same-origin, and otherwise clicks a `target="_top"` anchor to carry the tap out of the frame.
+- **Silent handoff failures are reported.** If the Square app does not come to the foreground within 2.5 seconds, the page says so and re-enables the button instead of leaving the cashier stuck.
+- **WooCommerce's "Pay for order" button no longer competes with the handoff.** It never completed a payment for this gateway — it reloaded the order-pay page and wiped the status. It is hidden while Square is selected and restored when another payment method is chosen.
+
+### Added
+
+- **Cashier debug log for the Square POS handoff.** Behind the existing checkout debug logs setting, Reader mode now records platform, user agent, frame state, navigation route, returned callback parameters, and the handoff URL with the order key redacted, for cashiers to copy and send to support.
+
+### Changed
+
+- **Clearer Square POS payment panel.** Status messages use the same severity colours and busy spinner as Terminal mode, the handoff button is styled as a real primary action instead of using wp-admin classes that do nothing on the storefront, and the redundant heading and nested card border were removed.
+
 ## [0.8.0] - 2026-07-23
 
 ### Added
