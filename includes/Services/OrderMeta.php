@@ -7,11 +7,34 @@
 
 namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+
 /**
  * Centralizes bounded logs and attempt lifecycle metadata.
  */
 final class OrderMeta {
 	public const RECONCILIATION_OPTION_PREFIX = 'sqtwc_reconcile_';
+
+	/**
+	 * Record the gateway because AJAX, webhook, sweep and POS app payments bypass
+	 * the pay form that normally stamps it. WooCommerce POS resolves its
+	 * per-gateway order status from this method inside payment_complete().
+	 * Claim only at completion so a failed, cancelled or detached attempt cannot
+	 * leave Square on an order that is then paid another way.
+	 * The caller saves the order.
+	 *
+	 * @param object $order WooCommerce order.
+	 */
+	public static function claim_order_gateway( $order ): void {
+		if ( Gateway::ID === $order->get_payment_method() && '' !== $order->get_payment_method_title() ) {
+			return;
+		}
+
+		$title = Settings::get( 'title', '' );
+		$order->set_payment_method( Gateway::ID );
+		$order->set_payment_method_title( ! empty( $title ) ? $title : __( 'Square Terminal', 'square-terminal-for-woocommerce' ) );
+	}
 
 	/**
 	 * Append a structured cashier log entry, retaining the newest 100 entries.

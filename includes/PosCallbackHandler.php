@@ -9,6 +9,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal;
 
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
 use WCPOS\WooCommercePOS\SquareTerminal\Utils\CurrencyConverter;
 
 /**
@@ -176,6 +177,7 @@ final class PosCallbackHandler {
 							implode( ', ', $payment_ids )
 						)
 					);
+					OrderMeta::claim_order_gateway( $locked_order );
 					$locked_order->payment_complete( (string) ( $payment_ids[0] ?? '' ) );
 					$locked_order->save();
 

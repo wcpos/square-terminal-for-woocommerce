@@ -244,6 +244,7 @@ final class CheckoutReconciler {
 		}
 
 		if ( ! $order->is_paid() ) {
+			OrderMeta::claim_order_gateway( $order );
 			$order->payment_complete( (string) ( $new_payment_ids[0] ?? $merged_payment_ids[0] ?? '' ) );
 		}
 

@@ -264,6 +264,7 @@ final class CheckoutReconcilerTest extends TestCase {
 				parent::payment_complete( $id );
 			}
 		};
+		$order->set_payment_method( 'pos_cash' );
 		$order->update_meta_data( '_sqtwc_current_attempt_id', 'attempt_current' );
 		$order->update_meta_data( '_sqtwc_checkout_idempotency_key', 'idem_current' );
 		$order->update_meta_data( '_sqtwc_checkout_id', 'chk_current' );
@@ -286,6 +287,7 @@ final class CheckoutReconcilerTest extends TestCase {
 
 		self::assertSame( array( 'timeout' => 8.0 ), $adapter->last_payment_options );
 		self::assertSame( '', $order->attempt_during_completion );
+		self::assertSame( 'sqtwc', $order->method_during_completion );
 	}
 
 	public function test_under_collection_places_order_on_hold_without_completing_payment(): void {
