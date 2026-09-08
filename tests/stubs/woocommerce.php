@@ -20,6 +20,7 @@ class SQTWC_Test_Order {
 	public string $payment_method_title = '';
 	public string $method_during_completion = 'not-called';
 	public function get_payment_method() { return $this->payment_method; }
+	public function get_payment_method_title() { return $this->payment_method_title; }
 	public function set_payment_method( $method ) { $this->payment_method = $method; }
 	public function set_payment_method_title( $title ) { $this->payment_method_title = $title; }
 	public array $meta = array(); public array $notes = array(); public bool $paid = false; public int $id; public string $key = 'key'; public string $transaction_id = ''; public int $payment_complete_calls = 0; public string $total = '12.34'; public string $currency = 'USD'; public string $status = 'pending';

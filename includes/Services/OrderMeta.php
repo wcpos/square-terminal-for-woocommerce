@@ -19,12 +19,14 @@ final class OrderMeta {
 	/**
 	 * Record the gateway because AJAX, webhook, sweep and POS app payments bypass
 	 * the pay form. POS order status and refund routing depend on this method.
+	 * Claim only at completion so a failed, cancelled or detached attempt cannot
+	 * leave Square on an order that is then paid another way.
 	 * The caller saves the order.
 	 *
 	 * @param object $order WooCommerce order.
 	 */
 	public static function claim_order_gateway( $order ): void {
-		if ( Gateway::ID === $order->get_payment_method() ) {
+		if ( Gateway::ID === $order->get_payment_method() && '' !== $order->get_payment_method_title() ) {
 			return;
 		}
 
@@ -71,7 +73,6 @@ final class OrderMeta {
 		$order->update_meta_data( '_sqtwc_device_id', $device_id );
 		$order->update_meta_data( '_sqtwc_attempt_started', time() );
 		$order->update_meta_data( '_sqtwc_square_checked_at', 0 );
-		self::claim_order_gateway( $order );
 		$order->save();
 		self::index_order( (int) $order->get_id() );
 	}

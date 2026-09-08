@@ -54,7 +54,19 @@ final class OrderMetaTest extends TestCase {
 		self::assertSame( 'Original custom title', $order->payment_method_title );
 	}
 
-	public function test_start_attempt_claims_gateway_before_saving(): void {
+	#[DataProvider( 'gateway_titles' )]
+	public function test_claim_fills_empty_title_on_existing_gateway( string $configured, string $expected ): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'title' => $configured );
+		$order = new \SQTWC_Test_Order();
+		$order->set_payment_method( 'sqtwc' );
+
+		OrderMeta::claim_order_gateway( $order );
+
+		self::assertSame( 'sqtwc', $order->get_payment_method() );
+		self::assertSame( $expected, $order->get_payment_method_title() );
+	}
+
+	public function test_start_attempt_leaves_payment_method_untouched(): void {
 		$order = new class() extends \SQTWC_Test_Order {
 			public string $saved_method = '';
 			public function save() {
@@ -65,6 +77,7 @@ final class OrderMetaTest extends TestCase {
 
 		OrderMeta::start_attempt( $order, 'attempt', 'idem', 'device', array() );
 
-		self::assertSame( 'sqtwc', $order->saved_method );
+		self::assertSame( 'pos_cash', $order->saved_method );
+		self::assertSame( 'pos_cash', $order->get_payment_method() );
 	}
 }
