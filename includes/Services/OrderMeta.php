@@ -18,7 +18,8 @@ final class OrderMeta {
 
 	/**
 	 * Record the gateway because AJAX, webhook, sweep and POS app payments bypass
-	 * the pay form. POS order status and refund routing depend on this method.
+	 * the pay form that normally stamps it. WooCommerce POS resolves its
+	 * per-gateway order status from this method inside payment_complete().
 	 * Claim only at completion so a failed, cancelled or detached attempt cannot
 	 * leave Square on an order that is then paid another way.
 	 * The caller saves the order.
