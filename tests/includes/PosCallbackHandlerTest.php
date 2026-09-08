@@ -115,6 +115,7 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertSame( '/thank-you', $url );
 		self::assertTrue( $this->order->paid );
 		self::assertSame( 'pay_1', $this->order->transaction_id );
+		self::assertSame( 'sqtwc', $this->order->method_during_completion );
 		self::assertSame( 'sq-order', $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
 	}
 

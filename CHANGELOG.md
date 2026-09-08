@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.2] - 2026-09-08
+
+### Fixed
+
+- **POS orders paid with Square ignored the per-gateway order status.** WooCommerce POS picks the status for a paid order from the gateway recorded on the order, but a Square payment is created and completed over AJAX, the webhook, the sweep or the Square POS app callback, never through the WooCommerce pay form that records the chosen gateway. The order kept an empty or default (cash) payment method, so the POS fell back to "Completed" whatever was configured for Square Terminal under POS → Settings → Checkout. The gateway is now recorded on the order when a Terminal checkout starts and again just before the order is marked paid. Refunds for these orders now route to this gateway as well.
+
 ## [0.8.1] - 2026-07-24
 
 ### Fixed
