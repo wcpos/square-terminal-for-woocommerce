@@ -18,6 +18,10 @@ final class PaymentSweeper {
 	public const SCHEDULE = 'sqtwc_ten_minutes';
 	private const RECONCILIATION_SEEDED_OPTION = 'sqtwc_reconcile_seeded';
 	private const RECONCILIATION_SEEDED_VALUE = '18446744073709551615';
+	/** Filter the posts order store applies to its assembled WP_Query arguments. */
+	private const POSTS_STORE_QUERY_FILTER = 'woocommerce_order_data_store_cpt_get_orders_query';
+	/** Filter listing the wc_get_orders() args the posts order store warns about (WooCommerce 9.2+). */
+	private const POSTS_STORE_UNSUPPORTED_ARGS_FILTER = 'woocommerce_order_data_store_cpt_query_unsupported_args';
 
 	/** @var object|null */
 	private $terminal_adapter;
@@ -103,6 +107,51 @@ final class PaymentSweeper {
 	}
 
 	/**
+	 * Copy a wc_get_orders() 'meta_query' into the posts order store's WP_Query.
+	 *
+	 * WC_Data_Store_WP::get_wp_query_args() skips the 'meta_query' key, so on
+	 * classic order storage the argument never reaches WP_Query. WooCommerce's
+	 * documented way to add query vars the store does not map itself is this
+	 * filter on the assembled WP_Query arguments. The clause is appended as a
+	 * nested group so it keeps its own relation and the store's own internal
+	 * meta clauses stay intact.
+	 *
+	 * @internal Hook callback, attached only while seed_legacy_index() queries.
+	 *
+	 * @param array<string,mixed> $wp_query_args Assembled WP_Query arguments.
+	 * @param array<string,mixed> $query_vars    Arguments given to wc_get_orders().
+	 * @return array<string,mixed>
+	 */
+	public static function pass_meta_query_to_posts_store( $wp_query_args, $query_vars ) {
+		if ( ! is_array( $wp_query_args ) || ! is_array( $query_vars ) || empty( $query_vars['meta_query'] ) ) {
+			return $wp_query_args;
+		}
+
+		$meta_query   = isset( $wp_query_args['meta_query'] ) && is_array( $wp_query_args['meta_query'] ) ? $wp_query_args['meta_query'] : array();
+		$meta_query[] = $query_vars['meta_query'];
+
+		$wp_query_args['meta_query'] = $meta_query; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- Forwarding the caller's clause; the store dropped it.
+
+		return $wp_query_args;
+	}
+
+	/**
+	 * Stop the posts order store warning about 'meta_query' while we forward it ourselves.
+	 *
+	 * WooCommerce 9.2+ raises a doing_it_wrong notice for 'meta_query' before it
+	 * assembles the WP_Query arguments. The notice is right in general and wrong
+	 * for the seed query, whose clause pass_meta_query_to_posts_store() applies.
+	 *
+	 * @internal Hook callback, attached only while seed_legacy_index() queries.
+	 *
+	 * @param array<int,string> $unsupported_args Query arg names the store warns about.
+	 * @return array<int,string>
+	 */
+	public static function allow_meta_query_on_posts_store( $unsupported_args ) {
+		return array_values( array_diff( (array) $unsupported_args, array( 'meta_query' ) ) );
+	}
+
+	/**
 	 * Seed the explicit index once from legacy lifecycle metadata.
 	 */
 	private function seed_legacy_index(): void {
@@ -110,35 +159,48 @@ final class PaymentSweeper {
 			return;
 		}
 
-		$orders = wc_get_orders(
-			array(
-				'limit'      => -1,
-				'return'     => 'objects',
-				'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- One-time lazy migration from the legacy reconciliation discovery path.
-					'relation' => 'OR',
-					array(
-						'relation' => 'AND',
+		// The posts order store ignores 'meta_query' (a doing_it_wrong notice at
+		// most) and would hand back every order and refund in the store, so the
+		// clause is passed to it through its own query filter for this one call,
+		// and its notice about the argument is switched off for the same call.
+		// HPOS honours 'meta_query' directly and never fires either hook.
+		add_filter( self::POSTS_STORE_QUERY_FILTER, array( self::class, 'pass_meta_query_to_posts_store' ), 10, 2 );
+		add_filter( self::POSTS_STORE_UNSUPPORTED_ARGS_FILTER, array( self::class, 'allow_meta_query_on_posts_store' ) );
+		try {
+			$orders = wc_get_orders(
+				array(
+					'type'       => 'shop_order',
+					'limit'      => -1,
+					'return'     => 'ids',
+					'meta_query' => array( // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- One-time lazy migration from the legacy reconciliation discovery path.
+						'relation' => 'OR',
 						array(
-							'key'     => '_sqtwc_checkout_id',
+							'relation' => 'AND',
+							array(
+								'key'     => '_sqtwc_checkout_id',
+								'value'   => '',
+								'compare' => '!=',
+							),
+							array(
+								'key'     => '_sqtwc_attempt_started',
+								'value'   => time() - 600,
+								'compare' => '<',
+								'type'    => 'NUMERIC',
+							),
+						),
+						array(
+							'key'     => '_sqtwc_abandoned_checkout_ids',
 							'value'   => '',
 							'compare' => '!=',
 						),
-						array(
-							'key'     => '_sqtwc_attempt_started',
-							'value'   => time() - 600,
-							'compare' => '<',
-							'type'    => 'NUMERIC',
-						),
 					),
-					array(
-						'key'     => '_sqtwc_abandoned_checkout_ids',
-						'value'   => '',
-						'compare' => '!=',
-					),
-				),
-			)
-		);
-		foreach ( $orders as $candidate ) {
+				)
+			);
+		} finally {
+			remove_filter( self::POSTS_STORE_QUERY_FILTER, array( self::class, 'pass_meta_query_to_posts_store' ), 10 );
+			remove_filter( self::POSTS_STORE_UNSUPPORTED_ARGS_FILTER, array( self::class, 'allow_meta_query_on_posts_store' ), 10 );
+		}
+		foreach ( (array) $orders as $candidate ) {
 			$order_id = is_object( $candidate ) && method_exists( $candidate, 'get_id' ) ? (int) $candidate->get_id() : absint( $candidate );
 			if ( $order_id <= 0 ) {
 				continue;

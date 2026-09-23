@@ -77,3 +77,4 @@ if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; p
 if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
 class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }
 if ( ! function_exists( 'wp_enqueue_style' ) ) { function wp_enqueue_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_enqueued_styles'][] = $handle; return true; } }
+if ( ! function_exists( 'remove_filter' ) ) { function remove_filter( $hook, $callback, $priority = 10 ) { $GLOBALS['sqtwc_filters'][$hook] = array_values( array_filter( $GLOBALS['sqtwc_filters'][$hook] ?? array(), static fn( $registered ) => $registered !== $callback ) ); return true; } }

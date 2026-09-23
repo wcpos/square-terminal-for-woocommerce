@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.3] - 2026-09-23
+
+### Fixed
+
+- **The one-time reconciliation seed queued every order on stores using classic order storage.** The first payment sweep after the reconciliation index was introduced asks WooCommerce for the orders with an unfinished or detached Square checkout, but stores that keep orders in the posts table ignore that filter (WooCommerce only logs a debug notice). The seed therefore loaded every order and refund in the store in one request and queued them all, so genuine stale checkouts waited behind a backlog that drains at 25 orders every ten minutes. The filter is now handed to the posts store through its own query hook, the seed asks for orders only, and it fetches ids instead of full order objects. Stores on High-Performance Order Storage were not affected.
+
 ## [0.8.2] - 2026-09-08
 
 ### Fixed
