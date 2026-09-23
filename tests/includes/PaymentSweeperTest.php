@@ -185,17 +185,59 @@ final class PaymentSweeperTest extends TestCase {
 		$order = new \SQTWC_Test_Order( 99 );
 		$order->update_meta_data( '_sqtwc_abandoned_checkout_ids', array( 'chk_open' ) );
 		$GLOBALS['sqtwc_orders'][99] = $order;
-		$GLOBALS['sqtwc_order_query_results'] = array( $order );
+		$filters_during_query = null;
+		$GLOBALS['sqtwc_wc_get_orders_callback'] = static function ( array $args ) use ( &$filters_during_query ): array {
+			unset( $args );
+			$filters_during_query = $GLOBALS['sqtwc_filters'];
+
+			// Production asks for ids; the seed must cope with plain integers.
+			return array( 99 );
+		};
 		$sweeper = new PaymentSweeper( new SweeperAdapter(), new SweeperReconciler(), new OrderLock() );
 
 		$sweeper->sweep();
 		$sweeper->sweep();
 
 		self::assertCount( 1, $GLOBALS['sqtwc_wc_get_orders_args'] );
-		self::assertSame( -1, $GLOBALS['sqtwc_wc_get_orders_args'][0]['limit'] );
-		self::assertArrayHasKey( 'meta_query', $GLOBALS['sqtwc_wc_get_orders_args'][0] );
+		$args = $GLOBALS['sqtwc_wc_get_orders_args'][0];
+		self::assertSame( -1, $args['limit'] );
+		// Refunds are order objects too and come back by default; ids keep an
+		// unbounded query from loading every order object at once.
+		self::assertSame( 'shop_order', $args['type'] );
+		self::assertSame( 'ids', $args['return'] );
+		self::assertArrayHasKey( 'meta_query', $args );
+		// The posts order store drops 'meta_query' and warns about it, so the
+		// clause must be handed to it through its query filter and the warning
+		// switched off while the query runs, and only then.
+		self::assertSame(
+			array(
+				'woocommerce_order_data_store_cpt_get_orders_query'      => array( array( PaymentSweeper::class, 'pass_meta_query_to_posts_store' ) ),
+				'woocommerce_order_data_store_cpt_query_unsupported_args' => array( array( PaymentSweeper::class, 'allow_meta_query_on_posts_store' ) ),
+			),
+			$filters_during_query
+		);
+		self::assertSame( array(), $GLOBALS['sqtwc_filters']['woocommerce_order_data_store_cpt_get_orders_query'] );
+		self::assertSame( array(), $GLOBALS['sqtwc_filters']['woocommerce_order_data_store_cpt_query_unsupported_args'] );
 		self::assertArrayHasKey( 'sqtwc_reconcile_seeded', $GLOBALS['sqtwc_options'] );
 		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
+	}
+
+	public function test_posts_store_unsupported_args_filter_drops_only_meta_query(): void {
+		self::assertSame( array( 'field_query' ), PaymentSweeper::allow_meta_query_on_posts_store( array( 'meta_query', 'field_query' ) ) );
+		self::assertSame( array(), PaymentSweeper::allow_meta_query_on_posts_store( 'meta_query' ) );
+	}
+
+	public function test_posts_store_filter_appends_the_meta_query_as_a_nested_clause(): void {
+		$clause        = array( 'relation' => 'OR', array( 'key' => '_sqtwc_checkout_id', 'value' => '', 'compare' => '!=' ) );
+		$internal      = array( 'key' => '_customer_user', 'value' => 5, 'compare' => '=' );
+		$wp_query_args = array( 'post_type' => 'shop_order', 'meta_query' => array( $internal ) );
+
+		$filtered = PaymentSweeper::pass_meta_query_to_posts_store( $wp_query_args, array( 'meta_query' => $clause ) );
+
+		self::assertSame( array( $internal, $clause ), $filtered['meta_query'] );
+		self::assertSame( 'shop_order', $filtered['post_type'] );
+		self::assertSame( $wp_query_args, PaymentSweeper::pass_meta_query_to_posts_store( $wp_query_args, array( 'limit' => 1 ) ) );
+		self::assertSame( array( 'meta_query' => array( $clause ) ), PaymentSweeper::pass_meta_query_to_posts_store( array(), array( 'meta_query' => $clause ) ) );
 	}
 
 	public function test_index_order_preserves_the_oldest_work_timestamp_and_unindex_deletes_the_order_option(): void {
