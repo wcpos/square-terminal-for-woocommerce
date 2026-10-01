@@ -13,10 +13,14 @@ use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
  *
  * wc_get_order() returns the copy a request already loaded until that request
  * evicts it: clean_post_cache() on the posts store, OrderCache::remove() on HPOS.
+ * On the posts store WC_Data also caches the order's meta per request; only
+ * read_meta_data( true ) or a save in that request refreshes it. HPOS reads
+ * meta with the order row.
  */
 final class RaceStore {
 	public array $rows = array();
 	public array $caches = array();
+	public array $meta_caches = array();
 	public string $request = '';
 	public string $driver;
 	public int $payment_complete_calls = 0;
@@ -31,7 +35,15 @@ final class RaceStore {
 			return null;
 		}
 
-		return $this->caches[ $this->request ][ $id ] ??= RaceOrder::from_row( $this, $id, $this->rows[ $id ] );
+		if ( ! isset( $this->caches[ $this->request ][ $id ] ) ) {
+			$row = $this->rows[ $id ];
+			if ( 'posts' === $this->driver ) {
+				$row['meta'] = $this->meta_caches[ $this->request ][ $id ] ??= $row['meta'];
+			}
+			$this->caches[ $this->request ][ $id ] = RaceOrder::from_row( $this, $id, $row );
+		}
+
+		return $this->caches[ $this->request ][ $id ];
 	}
 
 	public function evict( string $driver, int $id ): void {
@@ -81,8 +93,16 @@ final class RaceOrder extends \SQTWC_Test_Order {
 			'payment_method_title' => $this->payment_method_title,
 			'transaction_id'       => $this->transaction_id,
 		);
+		unset( $this->store->meta_caches[ $this->store->request ][ $this->id ] );
 
 		return $this->id;
+	}
+
+	public function read_meta_data( $force_read = false ) {
+		if ( $force_read ) {
+			$this->meta = $this->store->rows[ $this->id ]['meta'];
+			unset( $this->store->meta_caches[ $this->store->request ][ $this->id ] );
+		}
 	}
 
 	// Mirrors WC_Order::payment_complete(): stock is reduced unless this copy
@@ -265,6 +285,9 @@ final class CompletionRaceTest extends TestCase {
 		self::assertSame( 1, $this->store->payment_complete_calls, 'payment_complete() calls' );
 		self::assertSame( 1, $this->store->stock_reductions, 'stock reductions' );
 		self::assertTrue( $this->store->rows[ self::ORDER_ID ]['paid'] );
+		// A request that saw the paid status with stale meta would flag the one
+		// payment as a duplicate capture and ask the merchant to refund it.
+		self::assertArrayNotHasKey( '_sqtwc_duplicate_payment_ids', $this->store->rows[ self::ORDER_ID ]['meta'] );
 	}
 
 	/** @dataProvider drivers */
