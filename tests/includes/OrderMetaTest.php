@@ -17,6 +17,33 @@ final class OrderMetaTest extends TestCase {
 		Settings::reset_cache_for_tests();
 	}
 
+	public function test_reload_order_evicts_post_and_hpos_caches_before_loading(): void {
+		$log = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'posts:' . $id;
+		};
+		$GLOBALS['sqtwc_order_cache_remove_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos:' . $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'load:' . $id;
+			return new \SQTWC_Test_Order( 42 );
+		};
+
+		try {
+			$order = OrderMeta::reload_order( 42 );
+
+			self::assertSame( array( 'posts:42', 'hpos:42', 'load:42' ), $log );
+			self::assertSame( 42, $order->get_id() );
+		} finally {
+			unset(
+				$GLOBALS['sqtwc_clean_post_cache_callback'],
+				$GLOBALS['sqtwc_order_cache_remove_callback'],
+				$GLOBALS['sqtwc_wc_get_order_callback']
+			);
+		}
+	}
+
 	public static function gateway_titles(): array {
 		return array(
 			'default' => array( '', 'Square Terminal' ),

@@ -268,7 +268,7 @@ final class PaymentSweeper {
 	 * Re-fetch and reconcile every eligible checkout for one locked order.
 	 */
 	private function sweep_order( int $order_id ): void {
-		$order = wc_get_order( $order_id );
+		$order = OrderMeta::reload_order( $order_id );
 		if ( ! $order ) {
 			OrderMeta::unindex_order( $order_id );
 
