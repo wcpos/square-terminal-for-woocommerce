@@ -5,6 +5,7 @@ use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\AjaxHandler;
 use WCPOS\WooCommercePOS\SquareTerminal\PosCallbackHandler;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
 
@@ -12,14 +13,23 @@ use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
  * One order row shared by several requests, each with its own order cache.
  *
  * wc_get_order() returns the copy a request already loaded until that request
- * evicts it: clean_post_cache() on the posts store, OrderCache::remove() on HPOS.
+ * evicts every cache layer of the store: clean_post_cache() on the posts
+ * store, OrderCache::remove() on HPOS, and also
+ * OrdersTableDataStore::clear_cached_data() when HPOS data caching is on.
  * On the posts store WC_Data also caches the order's meta per request; only
  * read_meta_data( true ) or a save in that request refreshes it. HPOS reads
- * meta with the order row.
+ * meta with the order row, through the data cache when that is on.
  */
 final class RaceStore {
+	private const LAYERS = array(
+		'posts'           => array( 'posts' ),
+		'hpos'            => array( 'hpos' ),
+		'hpos_data_cache' => array( 'hpos', 'hpos_data' ),
+	);
+
 	public array $rows = array();
 	public array $caches = array();
+	public array $evicted = array();
 	public array $meta_caches = array();
 	public string $request = '';
 	public string $driver;
@@ -41,13 +51,15 @@ final class RaceStore {
 				$row['meta'] = $this->meta_caches[ $this->request ][ $id ] ??= $row['meta'];
 			}
 			$this->caches[ $this->request ][ $id ] = RaceOrder::from_row( $this, $id, $row );
+			unset( $this->evicted[ $this->request ][ $id ] );
 		}
 
 		return $this->caches[ $this->request ][ $id ];
 	}
 
-	public function evict( string $driver, int $id ): void {
-		if ( $driver === $this->driver ) {
+	public function evict( string $layer, int $id ): void {
+		$this->evicted[ $this->request ][ $id ][ $layer ] = true;
+		if ( array() === array_diff( self::LAYERS[ $this->driver ], array_keys( $this->evicted[ $this->request ][ $id ] ) ) ) {
 			unset( $this->caches[ $this->request ][ $id ] );
 		}
 	}
@@ -98,8 +110,10 @@ final class RaceOrder extends \SQTWC_Test_Order {
 		return $this->id;
 	}
 
+	// With HPOS data caching the data store serves meta from its cache, so a
+	// forced read refreshes nothing until clear_cached_data() runs.
 	public function read_meta_data( $force_read = false ) {
-		if ( $force_read ) {
+		if ( $force_read && 'hpos_data_cache' !== $this->store->driver ) {
 			$this->meta = $this->store->rows[ $this->id ]['meta'];
 			unset( $this->store->meta_caches[ $this->store->request ][ $this->id ] );
 		}
@@ -175,8 +189,9 @@ final class CompletionRaceTest extends TestCase {
 
 	public static function drivers(): array {
 		return array(
-			'posts' => array( 'posts' ),
-			'hpos'  => array( 'hpos' ),
+			'posts'           => array( 'posts' ),
+			'hpos'            => array( 'hpos' ),
+			'hpos_data_cache' => array( 'hpos_data_cache' ),
 		);
 	}
 
@@ -203,7 +218,9 @@ final class CompletionRaceTest extends TestCase {
 		unset(
 			$GLOBALS['sqtwc_wc_get_order_callback'],
 			$GLOBALS['sqtwc_clean_post_cache_callback'],
-			$GLOBALS['sqtwc_order_cache_remove_callback']
+			$GLOBALS['sqtwc_order_cache_remove_callback'],
+			$GLOBALS['sqtwc_hpos_data_cache_clear_callback'],
+			$GLOBALS['sqtwc_hpos_data_caching']
 		);
 	}
 
@@ -231,6 +248,8 @@ final class CompletionRaceTest extends TestCase {
 		$GLOBALS['sqtwc_wc_get_order_callback']       = static fn( $id ) => $store->load( (int) $id );
 		$GLOBALS['sqtwc_clean_post_cache_callback']   = static fn( int $id ) => $store->evict( 'posts', $id );
 		$GLOBALS['sqtwc_order_cache_remove_callback'] = static fn( int $id ) => $store->evict( 'hpos', $id );
+		$GLOBALS['sqtwc_hpos_data_cache_clear_callback'] = static fn( int $id ) => $store->evict( 'hpos_data', $id );
+		$GLOBALS['sqtwc_hpos_data_caching']              = 'hpos_data_cache' === $driver;
 	}
 
 	/** The request loads the order before it waits on the lock, as each entry point does. */
@@ -317,7 +336,33 @@ final class CompletionRaceTest extends TestCase {
 		$webhook = $this->webhook( 'webhook' );
 
 		$this->assert_completed_once();
-		self::assertNotSame( 500, $webhook['status'] );
+		// The fresh order has closed the attempt, so the webhook's checkout no
+		// longer matches it and is ignored.
+		self::assertSame( 202, $webhook['status'] );
+		self::assertSame( 'ignored', $webhook['result'] );
+	}
+
+	/** @dataProvider drivers */
+	public function test_sweep_after_the_webhook_does_not_complete_the_order_again( string $driver ): void {
+		$this->open_store( $driver );
+		// Old enough for the sweep to re-fetch the current checkout.
+		$this->store->rows[ self::ORDER_ID ]['meta']['_sqtwc_attempt_started'] = time() - 900;
+		$GLOBALS['sqtwc_options']['sqtwc_reconcile_seeded']                    = '18446744073709551615';
+		// The sweep's request loaded the order earlier, before the webhook finished.
+		$this->load_before_lock( 'sweep' );
+
+		$webhook = $this->webhook( 'webhook' );
+		self::assertSame( 200, $webhook['status'] );
+
+		// The sweep read its queue before the webhook unindexed the order.
+		$GLOBALS['sqtwc_options'][ 'sqtwc_reconcile_' . self::ORDER_ID ] = (string) ( time() - 900 );
+		$adapter = new RaceAdapter();
+		$this->store->in_request(
+			'sweep',
+			fn() => ( new PaymentSweeper( $adapter, new CheckoutReconciler( $adapter ) ) )->sweep()
+		);
+
+		$this->assert_completed_once();
 	}
 
 	/** @dataProvider drivers */
