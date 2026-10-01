@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.4] - 2026-10-01
+
+### Fixed
+
+- **The device chooser and Square Reader checklist rendered in the 200px label column of the settings page.** Both rows span the settings table with a `colspan`, but their cell also carried WooCommerce's `forminp` class, which WooCommerce's admin stylesheet sets to `display: block`. A block is no longer a table cell, so the browser ignored the colspan and laid the whole section out in the first column, wrapping the headline and clipping the card text. The cells now use the plugin's own class, so they span the full row as intended.
+
 ## [0.8.3] - 2026-09-23
 
 ### Fixed
