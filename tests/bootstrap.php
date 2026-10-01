@@ -2,6 +2,7 @@
 require_once dirname( __DIR__ ) . '/vendor/autoload.php';
 require_once __DIR__ . '/stubs/wordpress.php';
 require_once __DIR__ . '/stubs/woocommerce.php';
+require_once __DIR__ . '/stubs/woocommerce-caches.php';
 
 // The plugin file returns early without ABSPATH, so its namespaced constants
 // are never defined under PHPUnit. Asset registration needs them.
