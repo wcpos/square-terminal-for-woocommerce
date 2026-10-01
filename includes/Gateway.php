@@ -905,13 +905,21 @@ class Gateway extends \WC_Payment_Gateway {
 		);
 	}
 
-	/** Render the device choice as two radio cards. */
+	/**
+	 * Render the device choice as two radio cards.
+	 *
+	 * The row spans both table columns, so its cell must NOT carry
+	 * WooCommerce's `forminp` class: admin.css sets `.forminp` to
+	 * `display: block`, which stops it being a table cell and makes the
+	 * browser ignore the colspan, squeezing the cards into the 200px label
+	 * column. The same applies to the Square Reader checklist row below.
+	 */
 	public function generate_device_chooser_html( $key, $data ): string {
 		unset( $key, $data );
 		$selected = Settings::get_collection_method();
 
 		return sprintf(
-			'<tr valign="top"><td colspan="2" class="forminp"><fieldset class="sqtwc-device-chooser">'
+			'<tr valign="top"><td colspan="2" class="sqtwc-full-row"><fieldset class="sqtwc-device-chooser">'
 			. '<legend>%1$s</legend><p class="sqtwc-device-chooser__intro">%2$s</p><div class="sqtwc-device-chooser__cards">'
 			. '<label class="sqtwc-device-card"><input class="sqtwc-device-card__input" type="radio" name="woocommerce_sqtwc_collection_method" value="terminal"%3$s />'
 			. '<span class="sqtwc-device-card__body"><svg viewBox="0 0 64 64" aria-hidden="true"><rect x="15" y="5" width="34" height="54" rx="6" /><rect x="20" y="12" width="24" height="29" rx="2" /><path d="M24 50h16" /></svg><span><strong>%4$s</strong><span>%5$s</span></span></span></label>'
@@ -954,7 +962,7 @@ class Gateway extends \WC_Payment_Gateway {
 
 		ob_start();
 		?>
-		<tr valign="top"><td colspan="2" class="forminp"><section class="sqtwc-setup">
+		<tr valign="top"><td colspan="2" class="sqtwc-full-row"><section class="sqtwc-setup">
 			<h2><?php echo esc_html__( 'Set up your Square Reader', 'square-terminal-for-woocommerce' ); ?></h2>
 			<p class="sqtwc-setup__intro"><?php echo esc_html__( 'Five steps, about ten minutes, and you only ever do this once. Do steps 3 and 4 on this computer with your phone nearby.', 'square-terminal-for-woocommerce' ); ?></p>
 			<div id="sqtwc-setup-sandbox-notice" class="sqtwc-setup__notice"<?php echo $is_sandbox ? '' : ' style="display:none"'; ?>><strong><?php echo esc_html__( 'Test mode is on.', 'square-terminal-for-woocommerce' ); ?></strong> <?php echo esc_html__( 'Square doesn\'t offer a test mode for Reader payments — switch Environment to Live to use the Reader. Your checklist progress is kept.', 'square-terminal-for-woocommerce' ); ?></div>
