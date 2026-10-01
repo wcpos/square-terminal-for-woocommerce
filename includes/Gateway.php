@@ -59,9 +59,10 @@ class Gateway extends \WC_Payment_Gateway {
 		// get_title()/get_description(), the REST API, order payment-method
 		// titles and the WooCommerce POS gateway list. Only the admin Payments
 		// screen falls back to method_title, so leaving them unset made the
-		// gateway appear with a blank name everywhere except that screen.
-		$this->title       = $this->method_title;
-		$this->description = $this->method_description;
+		// gateway appear with a blank name everywhere except that screen. A
+		// saved title wins so lists agree with the orders OrderMeta stamps.
+		$this->title       = $this->get_option( 'title', $this->method_title );
+		$this->description = $this->get_option( 'description', $this->method_description );
 
 		add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
 		add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_payment_assets' ) );

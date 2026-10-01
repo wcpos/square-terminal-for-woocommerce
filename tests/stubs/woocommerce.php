@@ -12,7 +12,7 @@ if ( ! class_exists( 'WC_Payment_Gateway' ) ) {
 		public array $form_fields = array();
 		protected array $settings = array();
 		public function init_form_fields(): void {}
-		public function init_settings(): void {}
+		public function init_settings(): void { $this->settings = (array) get_option( 'woocommerce_' . $this->id . '_settings', array() ); }
 		public function has_fields() { return $this->has_fields; }
 		public function get_option( $key, $default = '' ) { return $this->settings[ $key ] ?? $default; }
 		public function process_admin_options() { return true; }
