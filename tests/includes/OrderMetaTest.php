@@ -27,13 +27,20 @@ final class OrderMetaTest extends TestCase {
 		};
 		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( &$log ) {
 			$log[] = 'load:' . $id;
-			return new \SQTWC_Test_Order( 42 );
+			$order = new class( 42 ) extends \SQTWC_Test_Order {
+				public array $log;
+				public function read_meta_data( $force_read = false ) {
+					$this->log[] = 'meta:' . ( $force_read ? 'force' : 'cache' );
+				}
+			};
+			$order->log = &$log;
+			return $order;
 		};
 
 		try {
 			$order = OrderMeta::reload_order( 42 );
 
-			self::assertSame( array( 'posts:42', 'hpos:42', 'load:42' ), $log );
+			self::assertSame( array( 'posts:42', 'hpos:42', 'load:42', 'meta:force' ), $log );
 			self::assertSame( 42, $order->get_id() );
 		} finally {
 			unset(

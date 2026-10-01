@@ -22,6 +22,9 @@ final class OrderMeta {
 	 * Every payment path loads the order before it waits on the order lock, so
 	 * inside the lock a plain wc_get_order() returns that earlier copy, which can
 	 * predate a completion by the lock's previous holder (#32).
+	 * On the posts store, WC_Data keeps the order's meta in its own object cache,
+	 * which clean_post_cache() leaves alone, so the meta is read again from the
+	 * database.
 	 *
 	 * @param int $order_id Order ID.
 	 * @return mixed WooCommerce order, or what wc_get_order() returns when there is none.
@@ -35,7 +38,12 @@ final class OrderMeta {
 			wc_get_container()->get( \Automattic\WooCommerce\Caches\OrderCache::class )->remove( $order_id );
 		}
 
-		return wc_get_order( $order_id );
+		$order = wc_get_order( $order_id );
+		if ( $order && method_exists( $order, 'read_meta_data' ) ) {
+			$order->read_meta_data( true );
+		}
+
+		return $order;
 	}
 
 	/**
