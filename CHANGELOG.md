@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.5] - 2026-10-01
+
+### Fixed
+
+- **The gateway had no title outside the WooCommerce Payments screen.** The gateway set only its admin `method_title` and never the public `title` and `description` properties that WooCommerce reads for `get_title()`, the REST API, order payment-method titles and the WooCommerce POS gateway list. The Payments screen falls back to `method_title`, so the gateway looked fine there while showing up in POS → Settings → Checkout as an unnamed row with only the ID `sqtwc`. Both properties are now set from the method title and description.
+
 ## [0.8.4] - 2026-10-01
 
 ### Fixed
