@@ -4,7 +4,11 @@ if ( ! class_exists( 'WC_Payment_Gateway' ) ) {
 		public string $id = '';
 		public string $method_title = '';
 		public string $method_description = '';
+		public $title = null;
+		public $description = null;
 		public bool $has_fields = false;
+		public function get_title() { return $this->title; }
+		public function get_description() { return $this->description; }
 		public array $form_fields = array();
 		protected array $settings = array();
 		public function init_form_fields(): void {}
