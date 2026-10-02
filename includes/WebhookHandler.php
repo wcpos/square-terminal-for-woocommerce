@@ -171,7 +171,7 @@ final class WebhookHandler {
 			return $this->order_lock->with_lock(
 				$order_id,
 				function () use ( $order_id, $event_id, $checkout ): array {
-					$order = wc_get_order( $order_id );
+					$order = OrderMeta::reload_order( $order_id );
 					if ( ! $order ) {
 						return array(
 							'status' => 404,

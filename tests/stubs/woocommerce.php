@@ -37,6 +37,6 @@ class SQTWC_Test_Order {
 	public function update_status($status, $note = '', $manual = false){$this->status=$status; if($note){$this->add_order_note($note);} return true;} public function get_status(){return $this->status;}
 	public function get_currency(){return $this->currency;} public function get_total(){return $this->total;}
 }
-if ( ! function_exists( 'wc_get_order' ) ) { function wc_get_order( $id ) { return $GLOBALS['sqtwc_orders'][$id] ?? null; } }
+if ( ! function_exists( 'wc_get_order' ) ) { function wc_get_order( $id ) { if ( isset( $GLOBALS['sqtwc_wc_get_order_callback'] ) ) { return $GLOBALS['sqtwc_wc_get_order_callback']( $id ); } return $GLOBALS['sqtwc_orders'][$id] ?? null; } }
 if ( ! function_exists( 'wc_get_orders' ) ) { function wc_get_orders( $args = array() ) { $GLOBALS['sqtwc_wc_get_orders_args'][] = $args; if ( isset( $GLOBALS['sqtwc_wc_get_orders_callback'] ) ) { return $GLOBALS['sqtwc_wc_get_orders_callback']( $args ); } return $GLOBALS['sqtwc_order_query_results'] ?? array(); } }
 if ( ! function_exists( 'wc_get_logger' ) ) { function wc_get_logger() { return new class { public function info($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('info',$m,$c);} public function warning($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('warning',$m,$c);} public function error($m,$c=array()){$GLOBALS['sqtwc_logs'][]=array('error',$m,$c);} }; } }

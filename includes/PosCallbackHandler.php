@@ -113,7 +113,7 @@ final class PosCallbackHandler {
 			$outcome  = $this->order_lock->with_lock(
 				$order_id,
 				function () use ( $order_id, $callback, $verified ): string {
-					$locked_order = wc_get_order( $order_id );
+					$locked_order = OrderMeta::reload_order( $order_id );
 					if ( ! $locked_order ) {
 						throw new \RuntimeException( 'WooCommerce order disappeared during verification.' );
 					}

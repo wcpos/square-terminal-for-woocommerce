@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.6] - 2026-10-01
+
+### Fixed
+
+- **An order could be completed twice, reducing stock twice.** The Square webhook, the payment screen's status check, the background sweep and the Square POS app return each wait on a per-order lock and then re-read the order. That re-read returned the copy the request had loaded before it waited, so a request that waited while another one completed the order still saw it unpaid. It completed the order again, and WooCommerce reduced stock and sent its paid-order hooks a second time. Inside the lock, the order is now read with the post and HPOS order caches cleared and its meta read again from the database.
+
 ## [0.8.5] - 2026-10-01
 
 ### Fixed

@@ -17,6 +17,51 @@ final class OrderMeta {
 	public const RECONCILIATION_OPTION_PREFIX = 'sqtwc_reconcile_';
 
 	/**
+	 * Load an order past this request's post and HPOS order caches.
+	 *
+	 * Every payment path loads the order before it waits on the order lock, so
+	 * inside the lock a plain wc_get_order() returns that earlier copy, which can
+	 * predate a completion by the lock's previous holder (#32).
+	 * On the posts store, WC_Data keeps the order's meta in its own object cache,
+	 * which clean_post_cache() leaves alone, so the meta is read again from the
+	 * database.
+	 * With WooCommerce's HPOS data caching on, the order data store also caches
+	 * the order row and its meta, and clear_cached_data() evicts them.
+	 *
+	 * @param int $order_id Order ID.
+	 * @return mixed WooCommerce order, or what wc_get_order() returns when there is none.
+	 */
+	public static function reload_order( int $order_id ) {
+		if ( function_exists( 'clean_post_cache' ) ) {
+			clean_post_cache( $order_id );
+		}
+
+		if ( function_exists( 'wc_get_container' ) && class_exists( \Automattic\WooCommerce\Caches\OrderCache::class ) ) {
+			wc_get_container()->get( \Automattic\WooCommerce\Caches\OrderCache::class )->remove( $order_id );
+		}
+
+		if (
+			function_exists( 'wc_get_container' )
+			&& class_exists( \Automattic\WooCommerce\Utilities\OrderUtil::class )
+			&& method_exists( \Automattic\WooCommerce\Utilities\OrderUtil::class, 'custom_orders_table_datastore_cache_enabled' )
+			&& \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_datastore_cache_enabled()
+			&& class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class )
+		) {
+			$data_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class );
+			if ( method_exists( $data_store, 'clear_cached_data' ) ) {
+				$data_store->clear_cached_data( array( $order_id ) );
+			}
+		}
+
+		$order = wc_get_order( $order_id );
+		if ( $order && method_exists( $order, 'read_meta_data' ) ) {
+			$order->read_meta_data( true );
+		}
+
+		return $order;
+	}
+
+	/**
 	 * Record the gateway because AJAX, webhook, sweep and POS app payments bypass
 	 * the pay form that normally stamps it. WooCommerce POS resolves its
 	 * per-gateway order status from this method inside payment_complete().
