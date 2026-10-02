@@ -19,12 +19,16 @@ use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
  * On the posts store WC_Data also caches the order's meta per request; only
  * read_meta_data( true ) or a save in that request refreshes it. HPOS reads
  * meta with the order row, through the data cache when that is on.
+ * In hpos_data_cache_row_gone the row's data-cache entry has already expired,
+ * so the row is read fresh, while its meta entry survives until
+ * OrdersTableDataStoreMeta::clear_cached_data() evicts it (#34).
  */
 final class RaceStore {
 	private const LAYERS = array(
 		'posts'           => array( 'posts' ),
 		'hpos'            => array( 'hpos' ),
 		'hpos_data_cache' => array( 'hpos', 'hpos_data' ),
+		'hpos_data_cache_row_gone' => array( 'hpos' ),
 	);
 
 	public array $rows = array();
@@ -47,7 +51,7 @@ final class RaceStore {
 
 		if ( ! isset( $this->caches[ $this->request ][ $id ] ) ) {
 			$row = $this->rows[ $id ];
-			if ( 'posts' === $this->driver ) {
+			if ( in_array( $this->driver, array( 'posts', 'hpos_data_cache_row_gone' ), true ) ) {
 				$row['meta'] = $this->meta_caches[ $this->request ][ $id ] ??= $row['meta'];
 			}
 			$this->caches[ $this->request ][ $id ] = RaceOrder::from_row( $this, $id, $row );
@@ -58,6 +62,9 @@ final class RaceStore {
 	}
 
 	public function evict( string $layer, int $id ): void {
+		if ( 'hpos_data_meta' === $layer && 'hpos_data_cache_row_gone' === $this->driver ) {
+			unset( $this->meta_caches[ $this->request ][ $id ] );
+		}
 		$this->evicted[ $this->request ][ $id ][ $layer ] = true;
 		if ( array() === array_diff( self::LAYERS[ $this->driver ], array_keys( $this->evicted[ $this->request ][ $id ] ) ) ) {
 			unset( $this->caches[ $this->request ][ $id ] );
@@ -113,7 +120,7 @@ final class RaceOrder extends \SQTWC_Test_Order {
 	// With HPOS data caching the data store serves meta from its cache, so a
 	// forced read refreshes nothing until clear_cached_data() runs.
 	public function read_meta_data( $force_read = false ) {
-		if ( $force_read && 'hpos_data_cache' !== $this->store->driver ) {
+		if ( $force_read && in_array( $this->store->driver, array( 'posts', 'hpos' ), true ) ) {
 			$this->meta = $this->store->rows[ $this->id ]['meta'];
 			unset( $this->store->meta_caches[ $this->store->request ][ $this->id ] );
 		}
@@ -192,6 +199,7 @@ final class CompletionRaceTest extends TestCase {
 			'posts'           => array( 'posts' ),
 			'hpos'            => array( 'hpos' ),
 			'hpos_data_cache' => array( 'hpos_data_cache' ),
+			'hpos_data_cache_row_gone' => array( 'hpos_data_cache_row_gone' ),
 		);
 	}
 
@@ -220,6 +228,8 @@ final class CompletionRaceTest extends TestCase {
 			$GLOBALS['sqtwc_clean_post_cache_callback'],
 			$GLOBALS['sqtwc_order_cache_remove_callback'],
 			$GLOBALS['sqtwc_hpos_data_cache_clear_callback'],
+			$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'],
+			$GLOBALS['sqtwc_hpos_row_cache_delete_result'],
 			$GLOBALS['sqtwc_hpos_data_caching']
 		);
 	}
@@ -249,7 +259,10 @@ final class CompletionRaceTest extends TestCase {
 		$GLOBALS['sqtwc_clean_post_cache_callback']   = static fn( int $id ) => $store->evict( 'posts', $id );
 		$GLOBALS['sqtwc_order_cache_remove_callback'] = static fn( int $id ) => $store->evict( 'hpos', $id );
 		$GLOBALS['sqtwc_hpos_data_cache_clear_callback'] = static fn( int $id ) => $store->evict( 'hpos_data', $id );
-		$GLOBALS['sqtwc_hpos_data_caching']              = 'hpos_data_cache' === $driver;
+		$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'] = static fn( int $id ) => $store->evict( 'hpos_data_meta', $id );
+		$GLOBALS['sqtwc_hpos_data_caching']              = in_array( $driver, array( 'hpos_data_cache', 'hpos_data_cache_row_gone' ), true );
+		// The row entry is already gone, so a persistent cache reports its delete as failed.
+		$GLOBALS['sqtwc_hpos_row_cache_delete_result'] = 'hpos_data_cache_row_gone' !== $driver;
 	}
 
 	/** The request loads the order before it waits on the lock, as each entry point does. */

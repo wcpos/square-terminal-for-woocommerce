@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [0.8.7] - 2026-10-02
+
+### Fixed
+
+- **A paid order could get a false "Refund may be required" note.** With WooCommerce's HPOS data caching on, WooCommerce clears an order's cached meta only when its cached row was deleted successfully. If a persistent object cache had already expired the row entry, the reload added in 0.8.6 read the paid order with its old meta. A webhook or background sweep that had waited then treated the one real payment as a second capture. The order was not completed twice. The plugin now clears the order's meta cache itself.
+
 ## [0.8.6] - 2026-10-01
 
 ### Fixed
