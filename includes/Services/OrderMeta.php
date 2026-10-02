@@ -26,7 +26,8 @@ final class OrderMeta {
 	 * which clean_post_cache() leaves alone, so the meta is read again from the
 	 * database.
 	 * With WooCommerce's HPOS data caching on, the order data store also caches
-	 * the order row and its meta, and clear_cached_data() evicts them.
+	 * the order row and its meta. Clear the meta directly too, because the data
+	 * store skips it when the row-cache delete fails (#34).
 	 *
 	 * @param int $order_id Order ID.
 	 * @return mixed WooCommerce order, or what wc_get_order() returns when there is none.
@@ -50,6 +51,12 @@ final class OrderMeta {
 			$data_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStore::class );
 			if ( method_exists( $data_store, 'clear_cached_data' ) ) {
 				$data_store->clear_cached_data( array( $order_id ) );
+			}
+			if ( class_exists( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class ) ) {
+				$meta_store = wc_get_container()->get( \Automattic\WooCommerce\Internal\DataStores\Orders\OrdersTableDataStoreMeta::class );
+				if ( method_exists( $meta_store, 'clear_cached_data' ) ) {
+					$meta_store->clear_cached_data( array( $order_id ) );
+				}
 			}
 		}
 

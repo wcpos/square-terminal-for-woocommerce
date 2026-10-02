@@ -23,6 +23,9 @@ final class OrderMetaTest extends TestCase {
 		$GLOBALS['sqtwc_hpos_data_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
 			$log[] = 'hpos_data:' . $id;
 		};
+		$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos_meta:' . $id;
+		};
 		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( $id ) use ( &$log ) {
 			$log[] = 'posts:' . $id;
 		};
@@ -44,12 +47,51 @@ final class OrderMetaTest extends TestCase {
 		try {
 			$order = OrderMeta::reload_order( 42 );
 
-			self::assertSame( array( 'posts:42', 'hpos:42', 'hpos_data:42', 'load:42', 'meta:force' ), $log );
+			self::assertSame( array( 'posts:42', 'hpos:42', 'hpos_data:42', 'hpos_meta:42', 'hpos_meta:42', 'load:42', 'meta:force' ), $log );
 			self::assertSame( 42, $order->get_id() );
 		} finally {
 			unset(
 				$GLOBALS['sqtwc_hpos_data_caching'],
 				$GLOBALS['sqtwc_hpos_data_cache_clear_callback'],
+				$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'],
+				$GLOBALS['sqtwc_clean_post_cache_callback'],
+				$GLOBALS['sqtwc_order_cache_remove_callback'],
+				$GLOBALS['sqtwc_wc_get_order_callback']
+			);
+		}
+	}
+
+	public function test_reload_order_clears_meta_cache_when_row_cache_delete_fails(): void {
+		$log = array();
+		$GLOBALS['sqtwc_hpos_data_caching'] = true;
+		$GLOBALS['sqtwc_hpos_row_cache_delete_result'] = false;
+		$GLOBALS['sqtwc_hpos_data_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos_data:' . $id;
+		};
+		$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos_meta:' . $id;
+		};
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'posts:' . $id;
+		};
+		$GLOBALS['sqtwc_order_cache_remove_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos:' . $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'load:' . $id;
+			return new \SQTWC_Test_Order( 42 );
+		};
+
+		try {
+			OrderMeta::reload_order( 42 );
+
+			self::assertSame( array( 'posts:42', 'hpos:42', 'hpos_data:42', 'hpos_meta:42', 'load:42' ), $log );
+		} finally {
+			unset(
+				$GLOBALS['sqtwc_hpos_data_caching'],
+				$GLOBALS['sqtwc_hpos_row_cache_delete_result'],
+				$GLOBALS['sqtwc_hpos_data_cache_clear_callback'],
+				$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'],
 				$GLOBALS['sqtwc_clean_post_cache_callback'],
 				$GLOBALS['sqtwc_order_cache_remove_callback'],
 				$GLOBALS['sqtwc_wc_get_order_callback']
@@ -62,6 +104,9 @@ final class OrderMetaTest extends TestCase {
 		$GLOBALS['sqtwc_hpos_data_caching'] = false;
 		$GLOBALS['sqtwc_hpos_data_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
 			$log[] = 'hpos_data:' . $id;
+		};
+		$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'] = static function ( $id ) use ( &$log ) {
+			$log[] = 'hpos_meta:' . $id;
 		};
 		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( $id ) use ( &$log ) {
 			$log[] = 'posts:' . $id;
@@ -82,6 +127,7 @@ final class OrderMetaTest extends TestCase {
 			unset(
 				$GLOBALS['sqtwc_hpos_data_caching'],
 				$GLOBALS['sqtwc_hpos_data_cache_clear_callback'],
+				$GLOBALS['sqtwc_hpos_meta_cache_clear_callback'],
 				$GLOBALS['sqtwc_clean_post_cache_callback'],
 				$GLOBALS['sqtwc_order_cache_remove_callback'],
 				$GLOBALS['sqtwc_wc_get_order_callback']
