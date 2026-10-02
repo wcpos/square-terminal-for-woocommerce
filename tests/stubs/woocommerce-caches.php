@@ -28,17 +28,42 @@ namespace Automattic\WooCommerce\Utilities {
 namespace Automattic\WooCommerce\Internal\DataStores\Orders {
 	if ( ! class_exists( OrdersTableDataStore::class ) ) {
 		class OrdersTableDataStore {
-			// Like WooCommerce, a no-op unless HPOS data caching is on.
+			// Like WooCommerce 11.1, a no-op unless HPOS data caching is on, and the
+			// meta cache is cleared only for ids whose row-cache delete succeeded.
+			// $GLOBALS['sqtwc_hpos_row_cache_delete_result'] = false models a
+			// persistent cache whose delete fails for a row key already gone.
 			public function clear_cached_data( array $order_ids ): array {
 				if ( empty( $GLOBALS['sqtwc_hpos_data_caching'] ) ) {
 					return array_fill_keys( $order_ids, true );
 				}
+				$deleted = array();
 				foreach ( $order_ids as $order_id ) {
 					if ( isset( $GLOBALS['sqtwc_hpos_data_cache_clear_callback'] ) ) {
 						$GLOBALS['sqtwc_hpos_data_cache_clear_callback']( (int) $order_id );
 					}
+					$deleted[ $order_id ] = $GLOBALS['sqtwc_hpos_row_cache_delete_result'] ?? true;
 				}
-				return array_fill_keys( $order_ids, true );
+				$meta = ( new OrdersTableDataStoreMeta() )->clear_cached_data( array_keys( array_filter( $deleted ) ) );
+				foreach ( $meta as $order_id => $meta_deleted ) {
+					$deleted[ $order_id ] = $deleted[ $order_id ] && $meta_deleted;
+				}
+				return $deleted;
+			}
+		}
+	}
+
+	if ( ! class_exists( OrdersTableDataStoreMeta::class ) ) {
+		class OrdersTableDataStoreMeta {
+			public function clear_cached_data( array $object_ids ): array {
+				if ( empty( $GLOBALS['sqtwc_hpos_data_caching'] ) ) {
+					return array_fill_keys( $object_ids, true );
+				}
+				foreach ( $object_ids as $object_id ) {
+					if ( isset( $GLOBALS['sqtwc_hpos_meta_cache_clear_callback'] ) ) {
+						$GLOBALS['sqtwc_hpos_meta_cache_clear_callback']( (int) $object_id );
+					}
+				}
+				return array_fill_keys( $object_ids, true );
 			}
 		}
 	}
