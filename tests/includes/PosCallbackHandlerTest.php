@@ -197,9 +197,13 @@ final class PosCallbackHandlerTest extends TestCase {
 		$other->meta['_sqtwc_pos_transaction_id'] = 'txn_first';
 		$GLOBALS['sqtwc_orders'][99] = $other;
 		$this->verifier->result['throw'] = true;
-		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );
-		self::assertStringNotContainsString( 'attacker-value', implode( "\n", $other->notes ) );
+		self::assertSame( '/thank-you', $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) ) );
+		self::assertSame( array(), $other->notes, 'A failed verification on an order paid on arrival writes nothing on the order' );
 		$this->verifier->result['throw'] = false;
+		// A real transaction that belongs to another order is that order's payment, not a second charge here.
+		$GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'txn_other' ) ] = '77';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_other', 'state' => $this->state() ) ) ) );
+		self::assertSame( array(), $other->notes );
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_second', 'state' => $this->state() ) ) ) );
 		self::assertSame( '/thank-you', $url );
 		self::assertStringContainsString( 'transaction txn_second for an order that was already paid', implode( "\n", $other->notes ) );

@@ -89,6 +89,17 @@ final class Legacy_Adoption {
 	}
 
 	/**
+	 * Whether Pro's panel must be held back for this order: no checkout to adopt, the order unpaid,
+	 * a pointer the old panel still marks live but too old to adopt, and no live Pro row for it.
+	 *
+	 * @param \WC_Order $order Order.
+	 * @param string    $ref   The adoptable reference, '' for none.
+	 */
+	private static function is_held( $order, string $ref ): bool {
+		return '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) && ! self::pro_row_live( $order, (string) $order->get_meta( '_sqtwc_checkout_id', true ) );
+	}
+
+	/**
 	 * Whether Pro adopted this checkout from the old panel (its record exists, whatever became of the leg).
 	 *
 	 * @param string $ref Action reference.
@@ -117,6 +128,29 @@ final class Legacy_Adoption {
 		$row = \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->find( $order, (string) wcpos_pro_payment_id_for_action( Square_Server_Provider::PROVIDER, $ref ) );
 
 		return null === $row || in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::LIVE_STATUSES, true );
+	}
+
+	/**
+	 * Whether Pro's row for this checkout can be read and is live: the one case in which an old
+	 * pointer is not held back (Pro's panel shows that leg and its controls). An adoption record
+	 * whose row cannot be read counts as owned elsewhere, but not here: its outcome is unknown.
+	 *
+	 * @param \WC_Order $order       Order.
+	 * @param string    $checkout_id Square checkout id.
+	 */
+	public static function pro_row_live( $order, string $checkout_id ): bool {
+		if ( '' === $checkout_id || ! function_exists( 'wcpos_pro_payment_id_for_action' ) || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return false;
+		}
+		$adopted    = (string) $order->get_meta( self::META_ADOPTED, true );
+		$ref        = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+		$payment_id = wcpos_pro_payment_id_for_action( Square_Server_Provider::PROVIDER, $ref );
+		if ( null === $payment_id ) {
+			return false;
+		}
+		$row = \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->find( $order, (string) $payment_id );
+
+		return null !== $row && in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::LIVE_STATUSES, true );
 	}
 
 	/**
@@ -285,12 +319,9 @@ final class Legacy_Adoption {
 			return null;
 		}
 		$ref = self::action_ref( $order );
-		if ( '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) && ! self::owns_checkout( $order, (string) $order->get_meta( '_sqtwc_checkout_id', true ) ) ) {
-			// Unknown outcome and nobody's: held. A checkout Pro owns renders Pro's panel, whose
-			// controls poll and cancel it, however old the pointer is.
-			return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
-		}
-		if ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) {
+		// An old pointer with an unknown outcome is decided under the locks too (a parallel request may
+		// have adopted it meanwhile); everything else that is nothing to adopt answers here.
+		if ( ! self::is_held( $order, $ref ) && ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) ) {
 			return null;
 		}
 		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Order_Lock' ) ) {
@@ -315,7 +346,9 @@ final class Legacy_Adoption {
 						return null;
 					}
 					$ref = self::action_ref( $fresh );
-					if ( '' === $ref && ! $fresh->is_paid() && self::has_stale_live_pointer( $fresh ) && ! self::owns_checkout( $fresh, (string) $fresh->get_meta( '_sqtwc_checkout_id', true ) ) ) {
+					if ( self::is_held( $fresh, $ref ) ) {
+						// Unknown outcome: held. A checkout whose Pro row reads live renders Pro's panel,
+						// whose controls poll and cancel it, however old the pointer is.
 						return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
 					}
 					if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {

@@ -51,6 +51,25 @@ final class LegacyAdoptionTest extends TestCase {
 		$GLOBALS['sqtwc_ledger_rows'][44] = array( array( 'id' => 'row-' . count( $GLOBALS['sqtwc_pro_adoptions'] ), 'status' => 'pending' ) );
 		$owned->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
 		self::assertNull( Legacy_Adoption::adopt_order( 44 ), 'Owned by Pro: the panel renders' );
+		$GLOBALS['sqtwc_ledger_rows'][44] = array();
+		self::assertSame( 'sqtwc_adoption_stale_attempt', Legacy_Adoption::adopt_order( 44 )->get_error_code(), 'A row that cannot be read is an unknown outcome: held' );
+		$GLOBALS['sqtwc_ledger_rows'][44] = array( array( 'id' => 'row-' . count( $GLOBALS['sqtwc_pro_adoptions'] ), 'status' => 'voided' ) );
+		self::assertSame( 'sqtwc_adoption_stale_attempt', Legacy_Adoption::adopt_order( 44 )->get_error_code(), 'Ended without money: held until the sweep closes the pointer' );
+		// Not owned before the locks, owned (adopted by a parallel request) under them: the panel renders.
+		$late = $this->order( 45, 'TC45' );
+		$late->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $late ) {
+			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held ) {
+				$GLOBALS['sqtwc_adopted']['sandbox:TC45'] = 'row-late';
+				$GLOBALS['sqtwc_ledger_rows'][45]         = array( array( 'id' => 'row-late', 'status' => 'pending' ) );
+			}
+			return $late;
+		};
+		try {
+			self::assertNull( Legacy_Adoption::adopt_order( 45 ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
 		// Live and recent when read before the locks; the copy under them shows the pointer aged out
 		// (a retry of a lost create kept the first start time): held, not adopted.
 		$aging = $this->order( 6 );
