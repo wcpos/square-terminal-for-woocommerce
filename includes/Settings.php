@@ -21,10 +21,18 @@ final class Settings {
 	private static ?array $settings = null;
 
 	/**
+	 * Whether the POS has the gateway switched on, for the current request.
+	 *
+	 * @var bool|null
+	 */
+	private static ?bool $enabled_for_pos = null;
+
+	/**
 	 * Reset the memoized settings after gateway options change.
 	 */
 	public static function reset_cache(): void {
-		self::$settings = null;
+		self::$settings        = null;
+		self::$enabled_for_pos = null;
 	}
 
 	/**
@@ -110,14 +118,17 @@ final class Settings {
 	 * Whether the POS has the gateway switched on (POS → Settings → Checkout): the only switch.
 	 */
 	public static function enabled_for_pos(): bool {
-		// wcpos_get_settings() is the maintained helper; woocommerce_pos_get_settings() is its deprecated alias.
-		$getter = function_exists( 'wcpos_get_settings' ) ? 'wcpos_get_settings' : 'woocommerce_pos_get_settings';
-		if ( ! function_exists( $getter ) ) {
-			return false;
-		}
-		$settings = $getter( 'payment_gateways' );
+		// Memoized per request: Free's reader rebuilds WooCommerce's gateway list on every read, and
+		// WooCommerce asks is_available() of every gateway on the pay page.
+		if ( null === self::$enabled_for_pos ) {
+			// wcpos_get_settings() is the maintained helper; woocommerce_pos_get_settings() is its deprecated alias.
+			$getter   = function_exists( 'wcpos_get_settings' ) ? 'wcpos_get_settings' : 'woocommerce_pos_get_settings';
+			$settings = function_exists( $getter ) ? $getter( 'payment_gateways' ) : array();
 
-		return is_array( $settings ) && ! empty( $settings['gateways'][ Gateway::ID ]['enabled'] );
+			self::$enabled_for_pos = is_array( $settings ) && ! empty( $settings['gateways'][ Gateway::ID ]['enabled'] );
+		}
+
+		return self::$enabled_for_pos;
 	}
 
 	/**

@@ -44,6 +44,8 @@ final class GatewayAvailabilityTest extends TestCase {
 		$GLOBALS['sqtwc_current_user_can'] = true;
 		self::assertTrue( ( new Gateway() )->is_available(), 'POS staff with the POS switch on' );
 		$GLOBALS['sqtwc_pos_settings']['payment_gateways']['gateways']['sqtwc']['enabled'] = false;
+		self::assertTrue( ( new Gateway() )->is_available(), 'The POS switch is read once per request' );
+		Settings::reset_cache_for_tests();
 		self::assertFalse( ( new Gateway() )->is_available(), 'POS switch off' );
 	}
 }

@@ -533,6 +533,11 @@ class Gateway extends \WC_Payment_Gateway {
 		// No "enabled" checkbox: the gateway is POS-only (see is_available()), and the switch for
 		// that is in POS → Settings → Checkout. The web checkout the checkbox governed is gone.
 		$this->form_fields = array(
+			'section_pos'              => array(
+				'title'       => __( 'Where to switch it on', 'square-terminal-for-woocommerce' ),
+				'type'        => 'title',
+				'description' => __( 'For staff on the POS only; never offered on the shop\'s checkout. Switch it on in POS → Settings → Checkout. The Enabled toggle on the Payments list has no effect.', 'square-terminal-for-woocommerce' ),
+			),
 			'section_account'          => array(
 				'title'       => __( 'Square account', 'square-terminal-for-woocommerce' ),
 				'type'        => 'title',
