@@ -25,7 +25,7 @@ A short-lived Square pairing code created by WooCommerce and entered on a Square
 _Avoid_: pairing token, activation code, login code
 
 **Storefront Checkout**:
-The customer-facing WooCommerce checkout flow for remote online shoppers. Square Terminal is available here only when explicitly enabled because the buyer usually cannot access the merchant's Terminal Device.
+The customer-facing WooCommerce checkout flow for remote online shoppers. Square Terminal is never offered here (Pro-only at WCPOS 2.0): the buyer cannot reach the merchant's Terminal Device.
 _Avoid_: web checkout when discussing in-person POS flows
 
 **POS Checkout**:
@@ -87,7 +87,7 @@ Domain expert: “WooCommerce creates a Device Code, the merchant enters it on t
 Dev: “Can the browser mark the order paid after polling?”
 Domain expert: “No. Polling may show progress, but a verified Square webhook is the authoritative Payment Completion Signal.”
 Dev: “Should shoppers see Square Terminal on ordinary checkout?”
-Domain expert: “Not by default. Square Terminal is primarily for POS Checkout; Storefront Checkout must be explicitly enabled.”
+Domain expert: “No. Square Terminal is for POS Checkout only; since WCPOS 2.0 the shop's checkout never offers it.”
 Dev: “Can WooCommerce refund Square Terminal payments in the first version?”
 Domain expert: “No. The first version collects payments only, but it stores Square Identifiers so refund support can be added later.”
 Dev: “Can a client create or cancel a Terminal Checkout with only an order ID?”

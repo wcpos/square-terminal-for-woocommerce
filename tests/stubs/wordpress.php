@@ -79,3 +79,6 @@ class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return
 if ( ! function_exists( 'wp_enqueue_style' ) ) { function wp_enqueue_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_enqueued_styles'][] = $handle; return true; } }
 if ( ! function_exists( 'remove_filter' ) ) { function remove_filter( $hook, $callback, $priority = 10 ) { $GLOBALS['sqtwc_filters'][$hook] = array_values( array_filter( $GLOBALS['sqtwc_filters'][$hook] ?? array(), static fn( $registered ) => $registered !== $callback ) ); return true; } }
 if ( ! function_exists( 'clean_post_cache' ) ) { function clean_post_cache( $post ) { if ( isset( $GLOBALS['sqtwc_clean_post_cache_callback'] ) ) { $GLOBALS['sqtwc_clean_post_cache_callback']( (int) $post ); } } }
+
+if ( ! function_exists( 'woocommerce_pos_request' ) ) { function woocommerce_pos_request() { return $GLOBALS['sqtwc_pos_request'] ?? false; } }
+if ( ! function_exists( 'wcpos_get_settings' ) ) { function wcpos_get_settings( $group ) { return $GLOBALS['sqtwc_pos_settings'][ $group ] ?? array(); } }

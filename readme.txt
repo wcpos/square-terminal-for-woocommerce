@@ -8,7 +8,7 @@ Stable tag: 0.8.7
 License: GPLv3 or later
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
-Collect WooCommerce order payments on Square Terminal devices.
+Collect WooCommerce order payments on Square Terminal devices. Requires WooCommerce POS Pro 2.0 or newer; the gateway is for staff on the POS and is never offered on the shop's checkout.
 
 == Collection methods ==
 

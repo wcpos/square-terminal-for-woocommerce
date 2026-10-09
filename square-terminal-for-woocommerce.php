@@ -67,6 +67,10 @@ function activation_check(): void {
 		deactivate_plugins( PLUGIN_FILE );
 		wp_die( esc_html__( 'Square Terminal for WooCommerce requires PHP 8.1 or newer.', 'square-terminal-for-woocommerce' ) );
 	}
+	// Terminal extensions are Pro-only at 2.0; Pro records the requirement for its own notice.
+	if ( function_exists( 'wcpos_pro_requires' ) ) {
+		wcpos_pro_requires( Server\Registration::REQUIRED_PRO_VERSION, __FILE__ );
+	}
 }
 
 register_activation_hook( __FILE__, __NAMESPACE__ . '\\activation_check' );
@@ -111,15 +115,26 @@ add_action(
 	}
 );
 
-add_action(
-	'plugins_loaded',
-	function (): void {
-		if ( class_exists( Plugin::class ) ) {
-			( new Plugin() )->init();
-		}
-	}
-);
+/**
+ * Render the notice shown when no compatible WCPOS Pro is active.
+ */
+function pro_requirement_notice(): void {
+	echo '<div class="notice notice-error"><p>' . esc_html__( 'Square Terminal for WooCommerce needs WooCommerce POS Pro 2.0.0 or newer.', 'square-terminal-for-woocommerce' ) . '</p></div>';
+}
 
-// WCPOS Pro 2.0 defines its provider registration from its own plugins_loaded hook at priority
-// 20; the adapter registers after that, and not at all on a site without a compatible Pro.
-add_action( 'plugins_loaded', array( Server\Registration::class, 'register' ), 30 );
+/**
+ * Register everything, or nothing but a notice without a compatible WCPOS Pro.
+ *
+ * Terminal extensions are Pro-only at 2.0: the keypad tile and the order-pay page both rely on
+ * Pro's shared payments base. Pro defines its helpers from its own plugins_loaded hook at
+ * priority 20, so this runs at 30.
+ */
+function init(): void {
+	if ( ! function_exists( 'wcpos_pro_requires' ) || ! wcpos_pro_requires( Server\Registration::REQUIRED_PRO_VERSION, __FILE__ ) ) {
+		add_action( 'admin_notices', __NAMESPACE__ . '\\pro_requirement_notice' );
+		return;
+	}
+	( new Plugin() )->init();
+	Server\Registration::register();
+}
+add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 30 );
