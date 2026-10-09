@@ -357,6 +357,31 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'] );
 	}
 
+	public function test_the_re_ask_keeps_the_question_open_when_a_refusal_proves_nothing(): void {
+		$this->refund_record();
+		$this->square->queue = array( self::lost() );
+		$this->adapter()->refund( $this->row(), 501, '5.00' );
+		// 401 and IDEMPOTENCY_KEY_REUSED on the replay do not say the first request made nothing.
+		foreach ( array( self::error( 401, 'UNAUTHORIZED' ), self::error( 400, 'IDEMPOTENCY_KEY_REUSED' ) ) as $try => $answer ) {
+			$this->square->queue = array( $answer );
+			Refund_Reask::run( 501, $try + 1, 99, $this->adapter() );
+			$this->assertSame( array( 501, $try + 2, 99 ), end( $GLOBALS['sqtwc_single_events'] )['args'] );
+		}
+		$this->assertCount( 1, $GLOBALS['sqtwc_orders'][99]->notes, 'No "no money was returned" note while the question is open' );
+	}
+
+	public function test_cashiers_see_the_mapped_message_and_the_create_body_is_locale_independent(): void {
+		$this->square->queue = array( self::error( 404, 'NOT_FOUND' ) );
+		$error = $this->adapter()->create_reader_action( $this->row(), 'DEV_GONE' );
+		$this->assertSame( 'This terminal is no longer paired. Choose another terminal or pair it again.', $error->get_error_message() );
+		$this->assertStringContainsString( 'NOT_FOUND', $error->get_error_data()['detail']['message'] );
+		$this->square->queue = array( self::lost() );
+		$error = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertSame( 'Square did not answer. The payment is being checked.', $error->get_error_message() );
+		$this->assertStringContainsString( 'lost', $error->get_error_data()['detail']['message'] );
+		$this->assertSame( 'Order #99', $this->square->body( 1 )['checkout']['note'] );
+	}
+
 	public function test_a_lost_read_before_the_refund_post_is_an_error_with_nothing_made_or_scheduled(): void {
 		$refund = $this->refund_record();
 		// A leg whose capture carried no transaction id: the payment must be read from the checkout first.

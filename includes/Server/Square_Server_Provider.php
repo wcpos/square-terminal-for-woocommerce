@@ -11,6 +11,7 @@ use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Exceptions\SquareApiException;
@@ -127,8 +128,9 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 					'device_id'         => $reader_id,
 					// Pro's row id (36 characters; Square allows 40), read back from the checkout and its payments.
 					'reference_id'      => (string) $row['id'],
-					/* translators: %s: order number. */
-					'note'              => sprintf( __( 'Order #%s', 'square-terminal-for-woocommerce' ), $order->get_order_number() ),
+					// Not translated: a replay of the row must send the byte-identical body under the same key
+					// (Square answers another body with IDEMPOTENCY_KEY_REUSED), whatever locale it runs in.
+					'note'              => 'Order #' . $order->get_order_number(),
 					'deadline_duration' => self::DEADLINE,
 				)
 			);
@@ -141,14 +143,14 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 			// IDEMPOTENCY_KEY_REUSED: a checkout under this row's key exists with another body (a
 			// replay after the reader changed); the first checkout may be on a terminal.
 			if ( self::unanswered_status( $e->getStatusCode() ) || 'IDEMPOTENCY_KEY_REUSED' === self::error_code( $e ) ) {
-				return $this->indeterminate( 'square_unanswered', $e->getMessage() );
+				return self::unanswered( $e, 'create' );
 			}
 
 			return self::provider_error( $e );
 		} catch ( Throwable $e ) {
 			// Transport loss: the checkout may exist. Free keeps the row pending; the replay carries the
 			// same idempotency key, and Square hands back the checkout the lost response made.
-			return $this->indeterminate( 'square_unanswered', $e->getMessage() );
+			return self::unanswered( $e, 'create' );
 		}
 	}
 
@@ -162,9 +164,9 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 
 			return self::observe( $terminal->get_checkout( $checkout_id ), $terminal );
 		} catch ( SquareApiException $e ) {
-			return self::unanswered_status( $e->getStatusCode() ) ? $this->indeterminate( 'square_unanswered', $e->getMessage() ) : self::provider_error( $e );
+			return self::unanswered_status( $e->getStatusCode() ) ? self::unanswered( $e, 'fetch' ) : self::provider_error( $e );
 		} catch ( Throwable $e ) {
-			return $this->indeterminate( 'square_unanswered', $e->getMessage() ); // Nothing observed; the next poll asks again.
+			return self::unanswered( $e, 'fetch' ); // Nothing observed; the next poll asks again.
 		}
 	}
 
@@ -248,10 +250,10 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 			if ( ! self::unanswered_status( $e->getStatusCode() ) && 'IDEMPOTENCY_KEY_REUSED' !== self::error_code( $e ) ) {
 				return self::provider_error( $e ); // Refused: nothing was made, and the merchant sees why.
 			}
-			return isset( $key ) ? $this->refund_unanswered( $order, $refund_id, $e ) : $this->indeterminate( 'square_unanswered', $e->getMessage() );
+			return isset( $key ) ? $this->refund_unanswered( $order, $refund_id, $e ) : self::unanswered( $e, 'refund' );
 		} catch ( Throwable $e ) {
 			// A read before the POST that went unanswered made nothing; an unanswered POST may have.
-			return isset( $key ) ? $this->refund_unanswered( $order, $refund_id, $e ) : $this->indeterminate( 'square_unanswered', $e->getMessage() );
+			return isset( $key ) ? $this->refund_unanswered( $order, $refund_id, $e ) : self::unanswered( $e, 'refund' );
 		}
 	}
 
@@ -609,24 +611,58 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	}
 
 	/**
-	 * A definitive provider error.
+	 * Square did not answer: the request may have been acted on. The cashier sees a short message;
+	 * the raw exception goes to the log.
+	 *
+	 * @param Throwable $e         Exception.
+	 * @param string    $operation What was being asked.
+	 */
+	private static function unanswered( Throwable $e, string $operation ): \WP_Error {
+		Logger::warning( 'Square did not answer', self::detail( $e ) + array( 'operation' => $operation ) );
+
+		return new \WP_Error(
+			'square_unanswered',
+			__( 'Square did not answer. The payment is being checked.', 'square-terminal-for-woocommerce' ),
+			array(
+				'indeterminate' => true,
+				'status'        => 502,
+				'detail'        => self::detail( $e ),
+			)
+		);
+	}
+
+	/**
+	 * A definitive provider error: a short translated message for the cashier (the existing error
+	 * mapper's), the raw exception in the detail and the log.
 	 *
 	 * @param Throwable $e Exception.
 	 */
 	private static function provider_error( Throwable $e ): \WP_Error {
+		$detail = self::detail( $e );
+		Logger::warning( 'Square refused a request', $detail );
+
+		return new \WP_Error(
+			'wcpos_provider_error',
+			( new SquareErrorMapper() )->map( $e )['cashier_message'],
+			array(
+				'status' => 502,
+				'detail' => $detail,
+			)
+		);
+	}
+
+	/**
+	 * What an exception says, for the detail and the log.
+	 *
+	 * @param Throwable $e Exception.
+	 */
+	private static function detail( Throwable $e ): array {
 		$detail = array( 'message' => $e->getMessage() );
 		if ( $e instanceof SquareApiException ) {
 			$detail['http_status'] = $e->getStatusCode();
 			$detail['error_code']  = self::error_code( $e );
 		}
 
-		return new \WP_Error(
-			'wcpos_provider_error',
-			$e->getMessage(),
-			array(
-				'status' => 502,
-				'detail' => $detail,
-			)
-		);
+		return $detail;
 	}
 }

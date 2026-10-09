@@ -61,7 +61,7 @@ final class SquareTerminalAdapter {
 					)
 				),
 				'referenceId'   => (string) $data['reference_id'],
-				'note'          => isset( $data['note'] ) ? (string) $data['note'] : null,
+				'note'          => isset( $data['note'] ) ? mb_substr( (string) $data['note'], 0, 500 ) : null, // Square allows 500 characters.
 				'deadlineDuration' => (string) ( $data['deadline_duration'] ?? 'PT5M' ),
 				'paymentOptions'   => new PaymentOptions( array( 'autocomplete' => true ) ),
 			)
@@ -139,7 +139,8 @@ final class SquareTerminalAdapter {
 						'currency' => (string) $data['currency'],
 					)
 				),
-				'reason'         => isset( $data['reason'] ) && '' !== $data['reason'] ? (string) $data['reason'] : null,
+				// Square allows 192 characters of reason.
+				'reason'         => isset( $data['reason'] ) && '' !== $data['reason'] ? mb_substr( (string) $data['reason'], 0, 192 ) : null,
 			)
 		);
 		$response = $this->client->refunds->refundPayment( $request, $options );

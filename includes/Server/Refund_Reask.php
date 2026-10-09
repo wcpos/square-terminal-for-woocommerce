@@ -123,11 +123,14 @@ final class Refund_Reask {
 		try {
 			$result = $adapter->refund_once( $request, $key );
 		} catch ( SquareApiException $e ) {
-			if ( Square_Server_Provider::unanswered_status( $e->getStatusCode() ) ) {
+			// Unanswered, refused for want of credentials, or a refund under this key exists with
+			// another body: none proves the first request made nothing, so the question stays open.
+			if ( Square_Server_Provider::unanswered_status( $e->getStatusCode() ) || in_array( $e->getStatusCode(), array( 401, 403 ), true ) || 'IDEMPOTENCY_KEY_REUSED' === Square_Server_Provider::error_code( $e ) ) {
 				self::again( $order, $refund_id, $try );
 				return;
 			}
-			// Square refused the replay: no refund was made under this key.
+			// Square refused the identical replay: had a refund been made under this key, Square would
+			// have handed it back instead, so no refund was made.
 			/* translators: 1: refund id, 2: Square's error. */
 			$order->add_order_note( sprintf( __( 'Square refused refund #%1$d: %2$s. No money was returned. The record still counts as refunded here: delete it, then refund from the Square dashboard if the money is owed.', 'square-terminal-for-woocommerce' ), $refund_id, Square_Server_Provider::error_code( $e ) ) );
 			$order->save();
