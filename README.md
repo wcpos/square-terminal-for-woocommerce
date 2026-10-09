@@ -66,7 +66,7 @@ Facts the adapter rests on, and what they mean for the store:
 - Money is read from the payment, never from the checkout. A cancelled checkout whose payment was captured (it timed out at the receipt screen) is money; a completed checkout whose payment cannot be read yet settles nothing until it can.
 - A reference carries its environment. A sandbox checkout is polled, cancelled and refunded with the sandbox token even after the gateway is switched to production.
 - A refund request Square did not answer keeps its WooCommerce refund record as pending, carrying the idempotency key saved before the request, and is asked about again every two minutes (up to five times) under that same key; Square hands back the refund the first request made, so no second refund is possible. Staff are told to check the Square dashboard if Square never answers.
-- Square webhooks for Pro must be subscribed at the URL `Settings::get_pro_webhook_url()` names (Pro's `wcpos/v2/payments/webhook` route with `provider=square`), with the signature key entered in the gateway settings. Square signs over that exact URL.
+- Square webhooks for Pro must be subscribed at the URL `Settings::get_pro_webhook_url()` names (Pro's `wcpos/v2/payments/webhook` route with `provider=square`), with that subscription's signature key entered in the gateway settings. Square signs over the exact registered URL and gives every subscription its own key, and the plugin holds one key, so the old route and Pro's route cannot both verify at once: until the order-pay page moves onto Pro's panel, keep the old subscription; Pro's polling settles its own payments without the webhook. The notification URL override does not apply to Pro's route.
 
 ### Conformance suite
 

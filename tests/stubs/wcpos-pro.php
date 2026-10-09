@@ -65,8 +65,11 @@ namespace {
 			public function get_header( $key ) { return $this->headers[ strtolower( $key ) ] ?? null; }
 		}
 	}
+	if ( ! class_exists( 'WC_Order_Refund' ) ) {
+		class WC_Order_Refund extends SQTWC_Test_Order {}
+	}
 	if ( ! class_exists( 'SQTWC_Test_Refund' ) ) {
-		class SQTWC_Test_Refund extends SQTWC_Test_Order {
+		class SQTWC_Test_Refund extends WC_Order_Refund {
 			public $parent_id;
 			public $reason = '';
 			public $saves = 0;

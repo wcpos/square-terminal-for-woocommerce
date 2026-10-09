@@ -23,7 +23,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Exceptions\SquareApiExcept
  * staff. Pro's ledger shows the refund pending throughout; nothing in Pro re-reads a pending refund.
  */
 final class Refund_Reask {
-	/** Cron hook; arguments are the refund id and the try number. */
+	/** Cron hook; arguments are the refund id, the try number and the parent order id. */
 	public const HOOK = 'sqtwc_reask_refund';
 
 	/** Seconds between asks: long enough for Square to have settled the first request. */
@@ -45,7 +45,7 @@ final class Refund_Reask {
 	 * Hook the cron handler.
 	 */
 	public static function register(): void {
-		add_action( self::HOOK, array( __CLASS__, 'run' ), 10, 2 );
+		add_action( self::HOOK, array( __CLASS__, 'run' ), 10, 3 );
 	}
 
 	/**
@@ -76,7 +76,7 @@ final class Refund_Reask {
 		/* translators: %d: refund id. */
 		$order->add_order_note( sprintf( __( 'Square did not confirm refund #%d. The refund is being checked again; do not refund it a second time.', 'square-terminal-for-woocommerce' ), $refund_id ) );
 		$order->save();
-		self::schedule( $refund_id, 1 );
+		self::schedule( $refund_id, 1, (int) $order->get_id() );
 	}
 
 	/**
@@ -84,22 +84,34 @@ final class Refund_Reask {
 	 *
 	 * @param int $refund_id Refund record id.
 	 * @param int $try       Try number.
+	 * @param int $order_id  Parent order id, so a deleted record can still be reported on its order.
 	 */
-	private static function schedule( int $refund_id, int $try ): void {
-		wp_schedule_single_event( time() + self::DELAY, self::HOOK, array( $refund_id, $try ) );
+	private static function schedule( int $refund_id, int $try, int $order_id ): void {
+		wp_schedule_single_event( time() + self::DELAY, self::HOOK, array( $refund_id, $try, $order_id ) );
 	}
 
 	/**
 	 * Replay the refund under its saved key and record Square's answer.
 	 *
-	 * @param int                      $refund_id Refund record id.
-	 * @param int                      $try       Try number.
-	 * @param Square_Server_Provider|null $adapter Adapter override for tests.
+	 * @param int                         $refund_id Refund record id.
+	 * @param int                         $try       Try number.
+	 * @param int                         $order_id  Parent order id.
+	 * @param Square_Server_Provider|null $adapter   Adapter override for tests.
 	 */
-	public static function run( int $refund_id, int $try = 1, $adapter = null ): void {
+	public static function run( int $refund_id, int $try = 1, int $order_id = 0, $adapter = null ): void {
 		$refund = wc_get_order( $refund_id );
-		$order  = $refund ? wc_get_order( (int) $refund->get_parent_id() ) : null;
-		if ( ! $refund || ! $order || '' !== (string) $refund->get_meta( self::META_REFUND, true ) ) {
+		if ( ! $refund instanceof \WC_Order_Refund ) {
+			// The record was deleted while Square's answer was outstanding: the money may still have moved.
+			$order = $order_id ? wc_get_order( $order_id ) : null;
+			if ( $order ) {
+				/* translators: %d: refund id. */
+				$order->add_order_note( sprintf( __( 'Refund #%d was deleted before Square confirmed it. Check the Square dashboard: the refund may have been made.', 'square-terminal-for-woocommerce' ), $refund_id ) );
+				$order->save();
+			}
+			return;
+		}
+		$order = wc_get_order( (int) $refund->get_parent_id() );
+		if ( ! $order || '' !== (string) $refund->get_meta( self::META_REFUND, true ) ) {
 			return;
 		}
 		$key     = (string) $refund->get_meta( self::META_ATTEMPT, true );
@@ -117,7 +129,7 @@ final class Refund_Reask {
 			}
 			// Square refused the replay: no refund was made under this key.
 			/* translators: 1: refund id, 2: Square's error. */
-			$order->add_order_note( sprintf( __( 'Square refused refund #%1$d: %2$s. No refund was made; refund it again if it is still owed.', 'square-terminal-for-woocommerce' ), $refund_id, Square_Server_Provider::error_code( $e ) ) );
+			$order->add_order_note( sprintf( __( 'Square refused refund #%1$d: %2$s. No money was returned. The record still counts as refunded here: delete it, then refund from the Square dashboard if the money is owed.', 'square-terminal-for-woocommerce' ), $refund_id, Square_Server_Provider::error_code( $e ) ) );
 			$order->save();
 			return;
 		} catch ( Throwable $e ) {
@@ -128,7 +140,7 @@ final class Refund_Reask {
 		$refund->save();
 		$failed = in_array( $result['status'], array( 'REJECTED', 'FAILED' ), true );
 		/* translators: 1: refund id, 2: Square refund id, 3: Square refund status. */
-		$order->add_order_note( sprintf( $failed ? __( 'Square reports refund #%1$d (%2$s) as %3$s: no money was returned. Refund it again if it is still owed.', 'square-terminal-for-woocommerce' ) : __( 'Square confirmed refund #%1$d (%2$s): %3$s.', 'square-terminal-for-woocommerce' ), $refund_id, (string) $result['id'], (string) $result['status'] ) );
+		$order->add_order_note( sprintf( $failed ? __( 'Square reports refund #%1$d (%2$s) as %3$s: no money was returned. The record still counts as refunded here: delete it, then refund from the Square dashboard if the money is owed.', 'square-terminal-for-woocommerce' ) : __( 'Square confirmed refund #%1$d (%2$s): %3$s.', 'square-terminal-for-woocommerce' ), $refund_id, (string) $result['id'], (string) $result['status'] ) );
 		$order->save();
 	}
 
@@ -141,12 +153,12 @@ final class Refund_Reask {
 	 */
 	private static function again( $order, int $refund_id, int $try ): void {
 		if ( $try < self::LIMIT ) {
-			self::schedule( $refund_id, $try + 1 );
+			self::schedule( $refund_id, $try + 1, (int) $order->get_id() );
 			return;
 		}
 		Logger::warning( 'Square never answered a refund; staff asked to check the dashboard', array( 'refund_id' => $refund_id ) );
 		/* translators: %d: refund id. */
-		$order->add_order_note( sprintf( __( 'Square has not confirmed refund #%d. Check the Square dashboard before refunding again.', 'square-terminal-for-woocommerce' ), $refund_id ) );
+		$order->add_order_note( sprintf( __( 'Square has not confirmed refund #%d. Check the Square dashboard: if the refund is there, nothing more is needed; if not, delete this refund record and refund from the dashboard.', 'square-terminal-for-woocommerce' ), $refund_id ) );
 		$order->save();
 	}
 }

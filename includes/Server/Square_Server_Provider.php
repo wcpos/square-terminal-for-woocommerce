@@ -12,7 +12,6 @@ use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
-use WCPOS\WooCommercePOS\SquareTerminal\Services\WebhookSignatureVerifier;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Exceptions\SquareApiException;
 use WCPOS\WooCommercePOSPro\Payments\Server\Abstract_Provider_Adapter;
@@ -189,8 +188,10 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 			if ( 'CANCELED' !== $status ) {
 				return 'requested'; // CANCEL_REQUESTED while the buyer may still be paying; COMPLETED is money polling will settle.
 			}
-			// A CANCELED checkout whose payment was captured is money; only the read of the payments can say.
-			return self::captured_payment( $checkout, $terminal ) ? 'requested' : 'final';
+			// A CANCELED checkout whose payment was captured is money, and one whose payment Square has
+			// approved but not completed may yet be; only the read of the payments can say.
+			$payment = self::settled_payment( $checkout, $terminal );
+			return $payment && 'failed' !== $payment['outcome'] ? 'requested' : 'final';
 		} catch ( Throwable $e ) {
 			return self::provider_error( $e );
 		}
@@ -203,7 +204,7 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 		$refund = wc_get_order( $refund_id );
 		// A historical webview row names no order; the refund record does.
 		$order = wc_get_order( (int) ( $row['order_id'] ?? ( $refund ? $refund->get_parent_id() : 0 ) ) );
-		if ( ! $order || ! $refund ) {
+		if ( ! $order || ! $refund instanceof \WC_Order_Refund ) {
 			return new \WP_Error( 'wcpos_refund_not_found', __( 'Order or refund not found.', 'square-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		}
 		$action = (string) ( $row['provider_refs']['action'] ?? '' );
@@ -242,7 +243,9 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 				'provider_ref' => ! empty( $result['id'] ) ? (string) $result['id'] : null,
 			);
 		} catch ( SquareApiException $e ) {
-			if ( ! self::unanswered_status( $e->getStatusCode() ) ) {
+			// IDEMPOTENCY_KEY_REUSED: a refund under this record's key exists already (made by a request
+			// whose answer was lost); its outcome is asked for, never a refusal.
+			if ( ! self::unanswered_status( $e->getStatusCode() ) && 'IDEMPOTENCY_KEY_REUSED' !== self::error_code( $e ) ) {
 				return self::provider_error( $e ); // Refused: nothing was made, and the merchant sees why.
 			}
 			return isset( $key ) ? $this->refund_unanswered( $order, $refund_id, $e ) : $this->indeterminate( 'square_unanswered', $e->getMessage() );
@@ -297,7 +300,7 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 		$body      = (string) $request->get_body();
 		$signature = (string) $request->get_header( self::SIGNATURE_HEADER );
 		$key       = Settings::get_webhook_signature_key();
-		if ( '' === $key || '' === $signature || ! ( new WebhookSignatureVerifier() )->verify( $body, $signature, $key, Settings::get_pro_webhook_url() ) ) {
+		if ( '' === $key || '' === $signature || '' === $body || ! self::signed( $body, $signature, $key ) ) {
 			return new \WP_Error( 'square_webhook_signature', __( 'Invalid Square webhook signature.', 'square-terminal-for-woocommerce' ), array( 'status' => 401 ) );
 		}
 		$event       = json_decode( $body, true );
@@ -347,6 +350,18 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	}
 
 	/**
+	 * Whether Square signed this body for Pro's route: HMAC-SHA256 over the notification URL followed
+	 * by the raw body, base64, compared in constant time.
+	 *
+	 * @param string $body      Raw request body.
+	 * @param string $signature Signature header.
+	 * @param string $key       The subscription's signature key.
+	 */
+	private static function signed( string $body, string $signature, string $key ): bool {
+		return hash_equals( base64_encode( hash_hmac( 'sha256', Settings::get_pro_webhook_url() . $body, $key, true ) ), $signature );
+	}
+
+	/**
 	 * Pure projection of a checkout read, not a ledger transition.
 	 *
 	 * @param array<string,mixed>   $checkout Normalized checkout.
@@ -382,11 +397,12 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 				'receipt'       => self::receipt( $payment ),
 			);
 		}
-		if ( 'COMPLETED' === $status ) {
-			// Square says paid but no payment of the checkout reads as captured: nothing is settled yet.
+		if ( 'COMPLETED' === $status || ( $payment && 'undecided' === $payment['outcome'] ) ) {
+			// Square says paid but no payment reads as captured, or a payment of an ended checkout is
+			// approved and not yet completed: nothing is settled, and nothing is lost, until it is.
 			return new \WP_Error(
 				'square_unanswered',
-				__( 'Square reports the checkout complete but its payment is not readable yet.', 'square-terminal-for-woocommerce' ),
+				__( 'Square has not finished the payment of this checkout yet.', 'square-terminal-for-woocommerce' ),
 				array(
 					'indeterminate' => true,
 					'status' => 502,
@@ -452,39 +468,44 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 				'receipt'       => self::receipt( $payment ),
 			);
 		}
-		if ( 'CANCELED' === $status ) {
+		if ( 'CANCELED' === $status && ! ( $payment && 'undecided' === $payment['outcome'] ) ) {
 			$declined = $payment && 'failed' === $payment['outcome'];
 			$patch['status'] = $declined || 'TIMED_OUT' === (string) ( $checkout['cancel_reason'] ?? '' ) ? 'failed' : 'voided';
 			return $patch;
 		}
-		$patch['status'] = 'pending'; // PENDING, IN_PROGRESS, CANCEL_REQUESTED; a COMPLETED checkout whose payment is unreadable waits for polling.
+		$patch['status'] = 'pending'; // PENDING, IN_PROGRESS, CANCEL_REQUESTED; an ended checkout whose payment is approved, or unreadable, waits for polling.
 		return $patch;
 	}
 
 	/**
-	 * The payment that decides a checkout: the captured one, else a failed one (a decline), else none.
+	 * The payment that decides a checkout: the captured one; else, once every payment has ended, a
+	 * failed one (a decline) or none; else undecided, because a payment Square has approved but not
+	 * yet completed may still become money after the checkout itself ended.
 	 *
 	 * @param array<string,mixed>   $checkout Normalized checkout.
 	 * @param SquareTerminalAdapter $terminal Terminal adapter.
-	 * @return array<string,mixed>|null Payment with an `outcome` of captured or failed.
+	 * @return array<string,mixed>|null Payment with an `outcome` of captured, failed or undecided; null when none was listed.
 	 */
 	private static function settled_payment( array $checkout, SquareTerminalAdapter $terminal ): ?array {
 		if ( ! in_array( (string) ( $checkout['status'] ?? '' ), array( 'COMPLETED', 'CANCELED' ), true ) ) {
 			return null;
 		}
-		$failed = null;
+		$failed    = null;
+		$undecided = null;
 		foreach ( (array) ( $checkout['payment_ids'] ?? array() ) as $payment_id ) {
 			$payment = $terminal->get_payment( (string) $payment_id );
 			$status  = (string) ( $payment['status'] ?? '' );
 			if ( 'COMPLETED' === $status || ( 'APPROVED' === $status && 'CAPTURED' === (string) ( $payment['card_status'] ?? '' ) ) ) {
 				return $payment + array( 'outcome' => 'captured' );
 			}
-			if ( 'FAILED' === $status && null === $failed ) {
-				$failed = $payment + array( 'outcome' => 'failed' );
+			if ( 'FAILED' === $status ) {
+				$failed = $failed ?? $payment + array( 'outcome' => 'failed' );
+			} elseif ( 'CANCELED' !== $status ) {
+				$undecided = $undecided ?? $payment + array( 'outcome' => 'undecided' ); // APPROVED or PENDING: Square may still complete it.
 			}
 		}
 
-		return $failed;
+		return $undecided ?? $failed;
 	}
 
 	/**

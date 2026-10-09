@@ -101,7 +101,7 @@ final class SquareServerProviderTest extends TestCase {
 	}
 
 	private static function payment( string $status, int $amount = 9295, string $currency = 'EUR' ): Response {
-		$card = array( 'status' => 'COMPLETED' === $status ? 'CAPTURED' : 'FAILED', 'card' => array( 'card_brand' => 'VISA', 'last_4' => '4242' ), 'entry_method' => 'CONTACTLESS', 'auth_result_code' => 'OK1' );
+		$card = array( 'status' => array( 'COMPLETED' => 'CAPTURED', 'APPROVED' => 'AUTHORIZED', 'CANCELED' => 'VOIDED' )[ $status ] ?? 'FAILED', 'card' => array( 'card_brand' => 'VISA', 'last_4' => '4242' ), 'entry_method' => 'CONTACTLESS', 'auth_result_code' => 'OK1' );
 		if ( 'FAILED' === $status ) {
 			$card['errors'] = array( array( 'category' => 'PAYMENT_METHOD_ERROR', 'code' => 'GENERIC_DECLINE' ) );
 		}
@@ -197,6 +197,23 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( '92.95', $result['amount'] );
 	}
 
+	public function test_an_approved_payment_on_an_ended_checkout_is_money_that_may_still_arrive(): void {
+		// Square approved the payment, the checkout timed out at the receipt screen, and Square has not
+		// completed the payment yet: nothing is settled, and the leg must not end on either side.
+		$approved = self::payment( 'APPROVED' );
+		$this->square->queue = array( self::checkout( 'CANCELED', array( 'PAY1' ), 'TIMED_OUT' ), $approved );
+		$error = $this->adapter()->fetch( 'sandbox:TC1' );
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertTrue( $error->get_error_data()['indeterminate'] );
+		$this->square->queue = array( self::checkout( 'CANCELED', array( 'PAY1' ), 'TIMED_OUT' ), self::payment( 'APPROVED' ) );
+		$this->assertSame( 'requested', $this->adapter()->cancel( 'sandbox:TC1' ) );
+		$this->square->queue = array( self::checkout( 'CANCELED', array( 'PAY1' ), 'TIMED_OUT' ), self::payment( 'APPROVED' ) );
+		$this->assertSame( 'pending', $this->adapter()->verify_webhook( $this->webhook( self::event() ) )['patch']['status'] );
+		// A payment Square itself cancelled ends nothing but the checkout: expired, as before.
+		$this->square->queue = array( self::checkout( 'CANCELED', array( 'PAY1' ), 'TIMED_OUT' ), self::payment( 'CANCELED' ) );
+		$this->assertSame( 'expired', $this->adapter()->fetch( 'sandbox:TC1' )['status'] );
+	}
+
 	public function test_a_completed_checkout_whose_payment_cannot_be_read_settles_nothing(): void {
 		$this->square->queue = array( self::checkout( 'COMPLETED', array( 'PAY1' ) ), self::error( 503, 'SERVICE_UNAVAILABLE' ) );
 		$error = $this->adapter()->fetch( 'sandbox:TC1' );
@@ -267,6 +284,23 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( array(), $GLOBALS['sqtwc_single_events'] );
 	}
 
+	public function test_a_refund_key_square_has_seen_with_another_body_is_asked_about_not_refused(): void {
+		$this->refund_record();
+		$this->square->queue = array( self::error( 400, 'IDEMPOTENCY_KEY_REUSED' ) );
+		$this->assertSame( array( 'status' => 'pending', 'provider_ref' => null ), $this->adapter()->refund( $this->row(), 501, '5.00' ) );
+		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'] );
+	}
+
+	public function test_a_record_deleted_before_square_answered_is_reported_on_its_order(): void {
+		$this->refund_record();
+		$this->square->queue = array( self::lost() );
+		$this->adapter()->refund( $this->row(), 501, '5.00' );
+		unset( $GLOBALS['sqtwc_orders'][501] );
+		Refund_Reask::run( 501, 1, 99, $this->adapter() );
+		$this->assertStringContainsString( 'Refund #501 was deleted before Square confirmed it', end( $GLOBALS['sqtwc_orders'][99]->notes ) );
+		$this->assertCount( 1, $this->square->requests, 'Nothing is replayed for a record that is gone' );
+	}
+
 	public function test_an_unanswered_refund_post_keeps_the_record_pending_and_schedules_a_re_ask(): void {
 		$refund = $this->refund_record();
 		$this->square->queue = array( self::lost() );
@@ -274,18 +308,18 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( array( 'status' => 'pending', 'provider_ref' => null ), $result );
 		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'] );
 		$this->assertSame( Refund_Reask::HOOK, $GLOBALS['sqtwc_single_events'][0]['hook'] );
-		$this->assertSame( array( 501, 1 ), $GLOBALS['sqtwc_single_events'][0]['args'] );
+		$this->assertSame( array( 501, 1, 99 ), $GLOBALS['sqtwc_single_events'][0]['args'] );
 		$this->assertStringContainsString( 'did not confirm refund #501', $GLOBALS['sqtwc_orders'][99]->notes[0] );
 		$key = $refund->get_meta( Refund_Reask::META_ATTEMPT );
 		// A second ask replays the identical request under the same key: Square dedupes, no second refund.
 		$this->square->queue = array( self::refund_response( 'COMPLETED' ) );
-		Refund_Reask::run( 501, 1, $this->adapter() );
+		Refund_Reask::run( 501, 1, 99, $this->adapter() );
 		$this->assertSame( $key, $this->square->body( 1 )['idempotency_key'] );
 		$this->assertSame( 'PAY1', $this->square->body( 1 )['payment_id'] );
 		$this->assertSame( 'RF1', $refund->get_meta( Refund_Reask::META_REFUND ) );
 		$this->assertStringContainsString( 'confirmed refund #501 (RF1): COMPLETED', end( $GLOBALS['sqtwc_orders'][99]->notes ) );
 		// Answered: a later ask is a no-op.
-		Refund_Reask::run( 501, 2, $this->adapter() );
+		Refund_Reask::run( 501, 2, 99, $this->adapter() );
 		$this->assertCount( 2, $this->square->requests );
 	}
 
@@ -294,10 +328,10 @@ final class SquareServerProviderTest extends TestCase {
 		$this->square->queue = array( self::lost() );
 		$this->adapter()->refund( $this->row(), 501, '5.00' );
 		$this->square->queue = array( self::error( 503, 'SERVICE_UNAVAILABLE' ) );
-		Refund_Reask::run( 501, 2, $this->adapter() );
-		$this->assertSame( array( 501, 3 ), end( $GLOBALS['sqtwc_single_events'] )['args'] );
+		Refund_Reask::run( 501, 2, 99, $this->adapter() );
+		$this->assertSame( array( 501, 3, 99 ), end( $GLOBALS['sqtwc_single_events'] )['args'] );
 		$this->square->queue = array( self::lost() );
-		Refund_Reask::run( 501, Refund_Reask::LIMIT, $this->adapter() );
+		Refund_Reask::run( 501, Refund_Reask::LIMIT, 99, $this->adapter() );
 		$this->assertCount( 2, $GLOBALS['sqtwc_single_events'], 'The last try schedules nothing more' );
 		$this->assertStringContainsString( 'Check the Square dashboard', end( $GLOBALS['sqtwc_orders'][99]->notes ) );
 		$this->assertSame( '', $refund->get_meta( Refund_Reask::META_REFUND ) );
@@ -308,8 +342,8 @@ final class SquareServerProviderTest extends TestCase {
 		$this->square->queue = array( self::lost() );
 		$this->adapter()->refund( $this->row(), 501, '5.00' );
 		$this->square->queue = array( self::error( 400, 'REFUND_AMOUNT_INVALID' ) );
-		Refund_Reask::run( 501, 1, $this->adapter() );
-		$this->assertStringContainsString( 'refused refund #501: REFUND_AMOUNT_INVALID. No refund was made', end( $GLOBALS['sqtwc_orders'][99]->notes ) );
+		Refund_Reask::run( 501, 1, 99, $this->adapter() );
+		$this->assertStringContainsString( 'refused refund #501: REFUND_AMOUNT_INVALID. No money was returned', end( $GLOBALS['sqtwc_orders'][99]->notes ) );
 		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'] );
 	}
 

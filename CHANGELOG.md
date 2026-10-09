@@ -7,7 +7,7 @@ All notable changes to this project are documented in this file. Release notes f
 ### Added
 
 - **A server adapter for the WCPOS Pro 2.0 payments base.** With Pro 2.0 active, the plugin registers `Square_Server_Provider`, so the POS app drives a paired Square Terminal through Pro's ledger: a checkout per ledger row (the row id is Square's idempotency key), polling, cancellation, signed `terminal.checkout.updated` webhooks on Pro's route, and refunds through Square's Refunds API. Pro's provider conformance suite runs against the real adapter over a scripted Square in CI, with the transcripts committed. Without a compatible Pro the plugin behaves as before.
-- **Refund requests Square does not answer are asked about again** under the same idempotency key, saved on the refund record before the request, until Square confirms the refund or staff are told to check the Square dashboard. No second refund can result from a lost answer.
+- **Refund requests Square does not answer are asked about again** under the same idempotency key, saved on the refund record before the request, until Square confirms the refund or staff are told to check the Square dashboard. No second refund can result from a lost answer. A payment Square has approved but not completed on a checkout that already ended is treated as money that may still arrive, never as a cancellation.
 
 ### Changed
 

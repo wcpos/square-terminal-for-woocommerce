@@ -169,7 +169,7 @@ final class SquareTerminalAdapter {
 			'updated_at'    => $checkout ? $checkout->getUpdatedAt() : null,
 			'created_at'    => $checkout ? $checkout->getCreatedAt() : null,
 			'cancel_reason' => $checkout ? $checkout->getCancelReason() : null,
-			'device_id'     => $checkout ? $checkout->getDeviceOptions()->getDeviceId() : null,
+			'device_id'     => $checkout && $checkout->getDeviceOptions() ? $checkout->getDeviceOptions()->getDeviceId() : null,
 		);
 	}
 
