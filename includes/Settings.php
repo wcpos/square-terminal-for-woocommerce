@@ -76,7 +76,20 @@ final class Settings {
 	 * as before for sites that have not connected.
 	 */
 	public static function get_access_token(): string {
-		$environment = self::get_environment();
+		return self::get_access_token_for( self::get_environment() );
+	}
+
+	/**
+	 * Return the access token for one Square environment, whatever the current setting is.
+	 *
+	 * A checkout made in the sandbox is polled, cancelled and refunded with the sandbox token even
+	 * after the merchant switches the gateway to production: the action's reference carries its
+	 * environment, and this is how the server adapter honours it.
+	 *
+	 * @param string $environment Square environment.
+	 */
+	public static function get_access_token_for( string $environment ): string {
+		$environment = 'production' === $environment ? 'production' : 'sandbox';
 		$connection  = SquareOAuth::connection();
 
 		if (
@@ -161,6 +174,16 @@ final class Settings {
 		// notification URL. The stored value remains an override for sites whose
 		// public URL differs from what WordPress derives.
 		return '' !== $configured ? $configured : self::get_default_webhook_url();
+	}
+
+	/**
+	 * Return the notification URL Square must sign for the WCPOS Pro payments base.
+	 *
+	 * Pro's shared webhook route, with the provider family as its query argument. Square signs
+	 * over the registered notification URL, so the subscription must name exactly this URL.
+	 */
+	public static function get_pro_webhook_url(): string {
+		return function_exists( 'rest_url' ) ? (string) add_query_arg( 'provider', 'square', rest_url( 'wcpos/v2/payments/webhook' ) ) : '';
 	}
 
 	/**

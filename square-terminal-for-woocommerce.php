@@ -119,3 +119,7 @@ add_action(
 		}
 	}
 );
+
+// WCPOS Pro 2.0 defines its provider registration from its own plugins_loaded hook at priority
+// 20; the adapter registers after that, and not at all on a site without a compatible Pro.
+add_action( 'plugins_loaded', array( Server\Registration::class, 'register' ), 30 );

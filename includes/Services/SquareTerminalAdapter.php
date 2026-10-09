@@ -16,6 +16,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Payment;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\PaymentOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckout;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Payments\Requests\GetPaymentsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\RefundPaymentRequest;
 
 /**
  * Translates plugin arrays to typed Square Terminal checkout requests.
@@ -118,6 +119,42 @@ final class SquareTerminalAdapter {
 	}
 
 	/**
+	 * Refund a Square payment.
+	 *
+	 * Square dedupes on the idempotency key: a replay of the same request hands back the refund
+	 * the first request made, so the caller may safely ask again when a response was lost.
+	 *
+	 * @param array<string,mixed> $data    Refund data: idempotency_key, payment_id, amount, currency, reason.
+	 * @param array<string,mixed> $options SDK request options.
+	 * @return array<string,mixed>
+	 */
+	public function refund_payment( array $data, array $options = array() ): array {
+		$request  = new RefundPaymentRequest(
+			array(
+				'idempotencyKey' => (string) $data['idempotency_key'],
+				'paymentId'      => (string) $data['payment_id'],
+				'amountMoney'    => new Money(
+					array(
+						'amount'   => (int) $data['amount'],
+						'currency' => (string) $data['currency'],
+					)
+				),
+				'reason'         => isset( $data['reason'] ) && '' !== $data['reason'] ? (string) $data['reason'] : null,
+			)
+		);
+		$response = $this->client->refunds->refundPayment( $request, $options );
+		$refund   = $response->getRefund();
+
+		return array(
+			'id'         => $refund ? $refund->getId() : null,
+			'status'     => $refund ? $refund->getStatus() : null,
+			'payment_id' => $refund ? $refund->getPaymentId() : null,
+			'amount'     => $refund && $refund->getAmountMoney() ? $refund->getAmountMoney()->getAmount() : null,
+			'currency'   => $refund && $refund->getAmountMoney() ? $refund->getAmountMoney()->getCurrency() : null,
+		);
+	}
+
+	/**
 	 * Normalize a Square checkout object.
 	 *
 	 * @param TerminalCheckout|null $checkout Square checkout object.
@@ -132,6 +169,7 @@ final class SquareTerminalAdapter {
 			'updated_at'    => $checkout ? $checkout->getUpdatedAt() : null,
 			'created_at'    => $checkout ? $checkout->getCreatedAt() : null,
 			'cancel_reason' => $checkout ? $checkout->getCancelReason() : null,
+			'device_id'     => $checkout ? $checkout->getDeviceOptions()->getDeviceId() : null,
 		);
 	}
 
@@ -142,9 +180,11 @@ final class SquareTerminalAdapter {
 	 * @return array<string,mixed>
 	 */
 	private function normalize_payment( ?Payment $payment ): array {
-		$total = $payment ? $payment->getTotalMoney() : null;
-		$tip   = $payment ? $payment->getTipMoney() : null;
-		$card  = $payment ? $payment->getCardDetails() : null;
+		$total  = $payment ? $payment->getTotalMoney() : null;
+		$tip    = $payment ? $payment->getTipMoney() : null;
+		$card   = $payment ? $payment->getCardDetails() : null;
+		$errors = $card ? (array) ( $card->getErrors() ?? array() ) : array();
+		$error  = $errors ? $errors[0] : null;
 
 		return array(
 			'id'             => $payment ? $payment->getId() : null,
@@ -154,6 +194,13 @@ final class SquareTerminalAdapter {
 			'tip_amount'     => $tip ? $tip->getAmount() : 0,
 			'tip_currency'   => $tip ? $tip->getCurrency() : null,
 			'card_status'    => $card ? $card->getStatus() : null,
+			'card_brand'     => $card && $card->getCard() ? $card->getCard()->getCardBrand() : null,
+			'card_last4'     => $card && $card->getCard() ? $card->getCard()->getLast4() : null,
+			'entry_method'   => $card ? $card->getEntryMethod() : null,
+			'auth_code'      => $card ? $card->getAuthResultCode() : null,
+			'error_code'     => $error && method_exists( $error, 'getCode' ) ? $error->getCode() : null,
+			'receipt_number' => $payment ? $payment->getReceiptNumber() : null,
+			'reference_id'   => $payment ? $payment->getReferenceId() : null,
 		);
 	}
 }

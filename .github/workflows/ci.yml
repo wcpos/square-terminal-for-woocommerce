@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - main
+      - next
 
 permissions:
   contents: read
@@ -73,3 +74,74 @@ jobs:
 
       - name: Run PHPCS
         run: composer lint
+
+  conformance:
+    name: Conformance (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.3']
+    defaults:
+      run:
+        working-directory: square-terminal-for-woocommerce
+    steps:
+      - name: Checkout extension
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: square-terminal-for-woocommerce
+          persist-credentials: false
+
+      # WCPOS Pro's provider conformance suite runs the real adapter under wp-env with Pro (which
+      # vendors Free) as a sibling plugin; see tests/conformance/. The org-level wcpos-bot App mints
+      # a token scoped to contents:read on the private Pro repo. Fork PRs get no secrets and stop
+      # here by design.
+      - name: Read-only Pro token
+        id: pro-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.WCPOS_BOT_APP_ID }}
+          private-key: ${{ secrets.WCPOS_BOT_PRIVATE_KEY }}
+          owner: wcpos
+          repositories: woocommerce-pos-pro
+          permission-contents: read
+
+      - name: Checkout Pro next as sibling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: wcpos/woocommerce-pos-pro
+          ref: next
+          path: woocommerce-pos-pro
+          token: ${{ steps.pro-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@7c071dfe9dc99bdf297fa79cb49ea005b9fcadbc
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer
+
+      # The extension's own dev dependency is PHPUnit 10, Pro's suite runs on PHPUnit 9, and one
+      # process cannot hold both: the extension is installed without dev packages (the SDK and
+      # Guzzle are runtime requirements) and the suite runs on Pro's PHPUnit.
+      - name: Install dependencies
+        run: |
+          composer install --no-dev --no-interaction --prefer-dist --no-progress
+          composer install --working-dir=../woocommerce-pos-pro --no-interaction --prefer-dist --no-progress
+
+      - name: Set up Node
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '22'
+
+      - name: Start WordPress test environment
+        run: |
+          npm i -g @wordpress/env
+          printf '{"phpVersion":"%s"}\n' '${{ matrix.php }}' > .wp-env.override.json
+          wp-env start
+
+      # Transcripts are compared, never recorded, here: recording is an opt-in inside the PHPUnit
+      # process (`wp-env run tests-cli -- env WCPOS_RECORD_TRANSCRIPTS=1 ...`) that CI does not set.
+      - name: Provider conformance suite
+        run: wp-env run --env-cwd='wp-content/plugins/square-terminal-for-woocommerce' tests-cli -- ../woocommerce-pos-pro/vendor/bin/phpunit -c phpunit.conformance.xml.dist
