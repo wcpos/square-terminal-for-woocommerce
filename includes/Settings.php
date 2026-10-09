@@ -146,6 +146,25 @@ final class Settings {
 	}
 
 	/**
+	 * Whether the POS order-pay page runs through WCPOS Pro's shared panel.
+	 *
+	 * Square POS app carve-out (roadmap#95): with the collection method set to the Square Point
+	 * of Sale app hand-off, the merchant keeps this plugin's own order-pay panel, because the
+	 * app hand-off has no home in Pro's panel yet. With a paired Terminal, the shared panel takes
+	 * the page and the payment becomes a ledger row, like a keypad payment.
+	 */
+	public static function uses_pro_panel(): bool {
+		$uses = 'pos_app' !== self::get_collection_method() && function_exists( 'wcpos_pro_order_pay_panel' );
+
+		/**
+		 * Filter whether the POS order-pay page runs through WCPOS Pro's shared panel.
+		 *
+		 * @param bool $uses True for Pro's panel, false for this plugin's own.
+		 */
+		return (bool) apply_filters( 'sqtwc_uses_pro_panel', $uses );
+	}
+
+	/**
 	 * Return the production Square application ID used by POS handoff.
 	 */
 	public static function get_pos_application_id(): string {

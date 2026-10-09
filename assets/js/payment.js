@@ -618,6 +618,14 @@
 				}
 
 				if (!res.ok) {
+					if (res.body && res.body.handled_by_pos) {
+						// WooCommerce POS drives this payment now: stop, and send the cashier to reload.
+						stopPolling();
+						setState(STATES.FINAL);
+						setStatus(errorMessage(res), 'warning', false);
+						log('warning', 'Payment handled by WooCommerce POS; polling stopped');
+						return;
+					}
 					onPollTransportError(seq);
 					return;
 				}

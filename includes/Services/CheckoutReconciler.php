@@ -8,6 +8,7 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use RuntimeException;
+use WCPOS\WooCommercePOS\SquareTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 use WCPOS\WooCommercePOS\SquareTerminal\Utils\CurrencyConverter;
 
@@ -54,6 +55,13 @@ final class CheckoutReconciler {
 
 		if ( ! $is_abandoned && $checkout_id !== (string) $order->get_meta( '_sqtwc_checkout_id', true ) ) {
 			return $this->ignored( $order, 'wrong_attempt' );
+		}
+
+		// A checkout WCPOS Pro adopted from the old panel, while Pro's leg is live, is settled by Pro
+		// alone: the old webhook, sweep and status check must not complete or close it a second
+		// time. Once Pro's leg has ended without money, these paths act again, as before.
+		if ( Legacy_Adoption::owns_checkout( $order, $checkout_id ) ) {
+			return $this->ignored( $order, 'pro_owned' );
 		}
 
 		if ( ! $is_abandoned && $this->is_stale( $checkout, $order ) ) {

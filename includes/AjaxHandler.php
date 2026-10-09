@@ -56,6 +56,11 @@ final class AjaxHandler {
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
 		}
+		if ( Settings::uses_pro_panel() ) {
+			// Under Pro's panel no old-panel start is accepted at all: a stale tab must not put a
+			// second checkout on a terminal beside Pro's leg.
+			return $this->handled_by_pos_response();
+		}
 		$device_id = sanitize_text_field( $request['device_id'] ?? '' );
 		if ( '' === $device_id ) {
 			return $this->error_response( 400, __( 'Device ID is required.', 'square-terminal-for-woocommerce' ) );
@@ -193,6 +198,9 @@ final class AjaxHandler {
 		return $this->with_fresh_order_lock(
 			$authorized['order']->get_id(),
 			function ( $order ) use ( $request ): array {
+				if ( Legacy_Adoption::owns_order( $order ) ) {
+					return $this->handled_by_pos_response(); // Pro polls and cancels its own leg.
+				}
 				if ( $order->is_paid() ) {
 					return $this->with_redirect(
 						array(
@@ -237,6 +245,9 @@ final class AjaxHandler {
 		$authorized = $this->authorized_order( $request );
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
+		}
+		if ( Legacy_Adoption::owns_order( $authorized['order'] ) ) {
+			return $this->handled_by_pos_response(); // The order-status cleanup still cancels through cancel_terminal_checkout_for_order().
 		}
 
 		return $this->cancel_terminal_checkout_for_order(
@@ -325,6 +336,9 @@ final class AjaxHandler {
 		return $this->with_fresh_order_lock(
 			$authorized['order']->get_id(),
 			function ( $order ) use ( $request ): array {
+				if ( Legacy_Adoption::owns_order( $order ) ) {
+					return $this->handled_by_pos_response(); // Releasing would leave Pro's leg without its checkout.
+				}
 				$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 				if ( '' === $checkout_id ) {
 					$posted_device = sanitize_text_field( $request['device_id'] ?? '' );
@@ -410,6 +424,22 @@ final class AjaxHandler {
 
 			return $this->error_response( 503, __( 'This order is busy. Please try again.', 'square-terminal-for-woocommerce' ) );
 		}
+	}
+
+	/**
+	 * The answer to an old-panel request for a payment WCPOS Pro drives: the script stops and
+	 * tells the cashier to reload, where Pro's panel takes over.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function handled_by_pos_response(): array {
+		return array(
+			'status'           => 409,
+			'error'            => __( 'This payment is handled by WooCommerce POS. Reload the page.', 'square-terminal-for-woocommerce' ),
+			'cashier_message'  => __( 'This payment is handled by WooCommerce POS. Reload the page.', 'square-terminal-for-woocommerce' ),
+			'handled_by_pos'   => true,
+			'continue_polling' => false,
+		);
 	}
 
 	/**

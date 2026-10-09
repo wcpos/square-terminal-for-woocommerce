@@ -135,7 +135,9 @@ final class WebhookHandlerTest extends TestCase {
 			)
 		);
 
-		self::assertSame( 400, $handler->handle( $bad, array( 'x-square-hmacsha256-signature' => 'sig' ) )['status'] );
+		// A reference that is not this plugin's (a WCPOS Pro checkout carries its ledger row id) is
+		// acknowledged, not refused, so Square does not retry it against this route.
+		self::assertSame( 202, $handler->handle( $bad, array( 'x-square-hmacsha256-signature' => 'sig' ) )['status'] );
 		self::assertSame( 202, $handler->handle( json_encode( array( 'type' => 'other.event' ) ), array( 'x-square-hmacsha256-signature' => 'sig' ) )['status'] );
 	}
 
