@@ -728,9 +728,14 @@ class Gateway extends \WC_Payment_Gateway {
 			// own (Square times it out) and the page says so.
 			$adopted = Legacy_Adoption::adopt_order( $order_id );
 			if ( is_wp_error( $adopted ) ) {
-				$message = Legacy_Adoption::is_deferral( $adopted )
-					? __( 'Another request is handling this order. Reload the page in a moment.', 'square-terminal-for-woocommerce' )
-					: __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. Square cancels an unpaid checkout within five minutes and this plugin clears it within about twenty; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+				if ( Legacy_Adoption::is_deferral( $adopted ) ) {
+					$message = __( 'Another request is handling this order. Reload the page in a moment.', 'square-terminal-for-woocommerce' );
+				} elseif ( 'sqtwc_adoption_stale_attempt' === $adopted->get_error_code() ) {
+					// Too old to adopt, and its outcome unknown until the old sweep reads it from Square.
+					$message = __( 'An earlier Square Terminal payment on this order has not been confirmed yet. It is being checked; reload the page in a few minutes, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+				} else {
+					$message = __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. Square cancels an unpaid checkout within five minutes and this plugin clears it within about twenty; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+				}
 				echo '<p class="sqtwc-payment__help">' . esc_html( $message ) . '</p>';
 
 				return;

@@ -76,6 +76,15 @@ final class ProPanelTest extends TestCase {
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_panels'] );
 	}
 
+	public function test_an_old_unconfirmed_checkout_holds_the_panel_until_the_sweep_has_read_it(): void {
+		$order = $this->order( 99, 'TC_OLD', 'IN_PROGRESS' );
+		$order->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		$html = $this->fields();
+		self::assertStringContainsString( 'has not been confirmed yet', $html );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_panels'], 'No second charge beside a checkout whose outcome is unknown' );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+	}
+
 	public function test_the_carve_out_keeps_the_old_panel_and_adopts_nothing(): void {
 		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
 		$this->order( 99, 'TC1', 'IN_PROGRESS' );

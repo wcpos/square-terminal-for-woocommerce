@@ -181,6 +181,14 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertSame( 1, $this->verifier->calls, 'Verified first' );
 		self::assertStringContainsString( 'transaction txn_late for an order that was already paid', implode( "\n", $order->notes ) );
 		self::assertSame( 0, $order->payment_complete_calls );
+		// The same second transaction returning again is not noted twice.
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $order ) { $order->paid = false; if ( '' !== (string) get_option( 'sqtwc_lock_99', '' ) ) { $order->paid = true; } return $order; };
+		try {
+			$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_late', 'state' => $this->state() ) ) ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertCount( 1, $order->notes );
 		// Already paid before any verification: the order key alone writes nothing.
 		$other = new \SQTWC_Test_Order( 99 );
 		$other->key = 'order-key';

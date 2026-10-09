@@ -49,7 +49,8 @@ final class Legacy_Adoption {
 	 * minutes after its create, and the old sweep reconciles a checkout once it is ten minutes
 	 * old, so a pointer older than an hour names a checkout that has long ended (the sweep
 	 * closes it) or one made under settings since changed (another environment), which Pro could
-	 * neither poll nor cancel. The old sweep stays in charge of those.
+	 * neither poll nor cancel. The old sweep stays in charge of those; until it has read them,
+	 * Pro's panel is held back (has_stale_live_pointer()).
 	 */
 	public const ADOPTION_WINDOW = HOUR_IN_SECONDS;
 
@@ -70,6 +71,21 @@ final class Legacy_Adoption {
 		}
 
 		return Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+	}
+
+	/**
+	 * Whether the order carries a checkout pointer the old panel still thinks live but too old to
+	 * adopt: its outcome is unknown until the old sweep has read it from Square. Age alone does not
+	 * say no money arrived, so Pro's panel must not offer a second charge beside it.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	public static function has_stale_live_pointer( $order ): bool {
+		$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
+		$status      = (string) $order->get_meta( '_sqtwc_checkout_status', true );
+		$started     = (int) $order->get_meta( '_sqtwc_attempt_started', true );
+
+		return '' !== $checkout_id && in_array( $status, self::LIVE_CHECKOUT_STATUSES, true ) && ( $started <= 0 || $started < time() - self::ADOPTION_WINDOW );
 	}
 
 	/**
@@ -269,6 +285,9 @@ final class Legacy_Adoption {
 			return null;
 		}
 		$ref = self::action_ref( $order );
+		if ( '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) ) {
+			return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
+		}
 		if ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) {
 			return null;
 		}
@@ -294,6 +313,9 @@ final class Legacy_Adoption {
 						return null;
 					}
 					$ref = self::action_ref( $fresh );
+					if ( '' === $ref && ! $fresh->is_paid() && self::has_stale_live_pointer( $fresh ) ) {
+						return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
+					}
 					if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {
 						return null;
 					}

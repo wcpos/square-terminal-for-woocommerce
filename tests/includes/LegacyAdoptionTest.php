@@ -39,7 +39,12 @@ final class LegacyAdoptionTest extends TestCase {
 		$old = $this->order( 4 );
 		$old->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
 		self::assertSame( '', Legacy_Adoption::action_ref( $old ) );
-		self::assertNull( Legacy_Adoption::adopt_order( 4 ) );
+		// Its outcome is unknown until the old sweep has read it: Pro's panel is held, not offered.
+		$held = Legacy_Adoption::adopt_order( 4 );
+		self::assertSame( 'sqtwc_adoption_stale_attempt', $held->get_error_code() );
+		self::assertFalse( Legacy_Adoption::is_deferral( $held ), 'The upgrade pass drops it; the sweep closes it' );
+		$old->meta['_sqtwc_checkout_status'] = 'CANCELED';
+		self::assertNull( Legacy_Adoption::adopt_order( 4 ), 'Read and ended: nothing to hold' );
 		$unknown = $this->order( 5 );
 		unset( $unknown->meta['_sqtwc_attempt_started'] );
 		self::assertSame( '', Legacy_Adoption::action_ref( $unknown ), 'No start time, no adoption' );
