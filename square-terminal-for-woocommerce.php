@@ -136,5 +136,7 @@ function init(): void {
 	}
 	( new Plugin() )->init();
 	Server\Registration::register();
+	// Fold checkouts the old order-pay panel left mid-flight into Pro's ledger, once per version.
+	add_action( 'init', array( Legacy_Adoption::class, 'upgrade' ), 20 );
 }
 add_action( 'plugins_loaded', __NAMESPACE__ . '\\init', 30 );

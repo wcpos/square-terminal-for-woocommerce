@@ -13,6 +13,7 @@ final class StubPosVerifier {
 		'amount'      => 1234,
 		'currency'    => 'USD',
 		'location_id' => 'LOC',
+		'notes'       => array( 'Order #99 – Shop' ),
 	);
 	public function verify( string $transaction_id ): array {
 		++$this->calls;
@@ -163,8 +164,79 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertFalse( $this->order->paid );
 	}
 
+	public function test_a_verified_return_for_an_order_paid_meanwhile_is_noted_and_an_unverified_one_is_not(): void {
+		// Unpaid when the request arrives, paid (by WCPOS Pro, say) by the time the lock is taken.
+		$order = $this->order;
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $order ) {
+			if ( '' !== (string) get_option( 'sqtwc_lock_99', '' ) ) {
+				$order->paid = true;
+			}
+			return $order;
+		};
+		try {
+			$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_late', 'state' => $this->state() ) ) ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertSame( '/thank-you', $url );
+		self::assertSame( 1, $this->verifier->calls, 'Verified first' );
+		self::assertStringContainsString( 'transaction txn_late for an order that was already paid', implode( "\n", $order->notes ) );
+		self::assertSame( 0, $order->payment_complete_calls );
+		// The same second transaction returning again is not noted twice.
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $order ) { $order->paid = false; if ( '' !== (string) get_option( 'sqtwc_lock_99', '' ) ) { $order->paid = true; } return $order; };
+		try {
+			$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_late', 'state' => $this->state() ) ) ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertCount( 1, $order->notes );
+		// Already paid, and a different transaction returns: verified first, then noted; the order key
+		// alone writes nothing (a verification that fails writes the failure note only).
+		$other = new \SQTWC_Test_Order( 99 );
+		$other->key = 'order-key';
+		$other->paid = true;
+		$other->meta['_sqtwc_pos_transaction_id'] = 'txn_first';
+		$GLOBALS['sqtwc_orders'][99] = $other;
+		$this->verifier->result['throw'] = true;
+		self::assertSame( '/thank-you', $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) ) );
+		self::assertSame( array(), $other->notes, 'A failed verification on an order paid on arrival writes nothing on the order' );
+		$this->verifier->result['throw'] = false;
+		// A real transaction that belongs to another order is that order's payment, not a second charge here:
+		// claimed by another order, recorded on another order, taken at another location, or in another currency.
+		$GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'txn_other' ) ] = '77';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_other', 'state' => $this->state() ) ) ) );
+		$GLOBALS['sqtwc_order_query_results'] = array( 78 );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_recorded_elsewhere', 'state' => $this->state() ) ) ) );
+		$GLOBALS['sqtwc_order_query_results'] = array();
+		$this->verifier->result['location_id'] = 'OTHER_LOC';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_elsewhere', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['location_id'] = 'LOC';
+		$this->verifier->result['currency'] = 'EUR';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_eur', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['currency'] = 'USD';
+		// A real unclaimed transaction that does not name this order (another sale, or a guess by an
+		// order-key holder) is no evidence of a second charge here.
+		$this->verifier->result['notes'] = array( 'Order #990 – Shop' );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_unrelated', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array( 'Order #99A – Shop', 'Order #99-3' );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_custom_numbers', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array();
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_noteless', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array( 'Order #99 – Shop' );
+		self::assertSame( array(), $other->notes );
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_second', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertStringContainsString( 'transaction txn_second for an order that was already paid', implode( "\n", $other->notes ) );
+		self::assertSame( 0, $other->payment_complete_calls );
+		// The transaction that paid it returning again: the receipt, with no call to Square.
+		$calls = $this->verifier->calls;
+		self::assertSame( '/thank-you', $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_first', 'state' => $this->state() ) ) ) ) );
+		self::assertSame( $calls, $this->verifier->calls );
+	}
+
 	public function test_already_paid_order_redirects_to_receipt_without_recompletion(): void {
 		$this->order->paid = true;
+		$this->order->meta['_sqtwc_pos_transaction_id'] = 'attacker-value';
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );
 		self::assertSame( '/thank-you', $url );
 		self::assertSame( 0, $this->order->payment_complete_calls );

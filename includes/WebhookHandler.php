@@ -151,9 +151,11 @@ final class WebhookHandler {
 		$checkout  = $event['data']['object']['checkout'] ?? null;
 		$reference = is_array( $checkout ) ? (string) ( $checkout['reference_id'] ?? '' ) : '';
 		if ( ! preg_match( '/^woocommerce_order_(\d+)$/', $reference, $matches ) ) {
+			// A checkout WCPOS Pro created carries its ledger row id here and is delivered to Pro's
+			// own route; this route acknowledges it so Square does not retry.
 			return array(
-				'status' => 400,
-				'error'  => __( 'Invalid reference_id.', 'square-terminal-for-woocommerce' ),
+				'status' => 202,
+				'result' => 'ignored',
 			);
 		}
 

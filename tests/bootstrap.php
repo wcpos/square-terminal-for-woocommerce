@@ -32,3 +32,6 @@ foreach ( array( 'Square\\Exceptions\\SquareApiException', 'Square\\Exceptions\\
     class_exists( 'WCPOS\\WooCommercePOS\\SquareTerminal\\Vendor\\' . $sqtwc_exception );
 }
 require_once dirname(__DIR__) . '/square-terminal-for-woocommerce.php';
+
+// The stubbed Pro panel helpers exist for every test; the old-panel tests run under the carve-out.
+$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;

@@ -104,3 +104,22 @@ test('stop polling on continue_polling:false', async () => {
 	// No further tick should be scheduled.
 	assert.ok(ctx.clock.pending() <= pendingBefore - 1 || ctx.clock.pending() === 0);
 });
+
+test('a 409 saying WooCommerce POS handles the payment stops polling and tells the cashier to reload', async () => {
+	const ctx = setup(payment);
+	await startAndEnterPolling(ctx);
+
+	ctx.clock.runNext();
+	await flush();
+	// The old status action answers 409 with handled_by_pos: a stale tab beside Pro's panel.
+	ctx.fetch.settle({ status: 409, handled_by_pos: true, cashier_message: 'This payment is handled by WooCommerce POS. Reload the page.', continue_polling: false });
+	await flush();
+
+	assert.equal(ctx.controller.state.name, payment.STATES.FINAL);
+	assert.equal(ctx.els.status.textContent, 'This payment is handled by WooCommerce POS. Reload the page.');
+	assert.equal(ctx.clock.pending(), 0, 'no further poll is scheduled');
+	const calls = ctx.fetch.callCount();
+	ctx.clock.runNext();
+	await flush();
+	assert.equal(ctx.fetch.callCount(), calls, 'no further request');
+});

@@ -42,11 +42,51 @@ namespace WCPOS\WooCommercePOSPro\Payments\Server {
 	}
 }
 
+namespace WCPOS\WooCommercePOS\Payments\Contract {
+	if ( ! class_exists( Order_Lock::class ) ) {
+		/** Free's per-order lock: `$GLOBALS['sqtwc_free_lock_held']` makes with_lock() refuse. */
+		final class Order_Lock {
+			public static $held = false;
+			public static function instance(): self { return new self(); }
+			public function with_lock( int $order_id, callable $callback ) {
+				if ( ! empty( $GLOBALS['sqtwc_free_lock_held'] ) ) { return new \WP_Error( 'wcpos_payment_locked', 'locked', array( 'status' => 409 ) ); }
+				self::$held = true;
+				try { return $callback(); } finally { self::$held = false; }
+			}
+		}
+	}
+	if ( ! class_exists( Ledger::class ) ) {
+		/** Free's ledger: rows come from `$GLOBALS['sqtwc_ledger_rows'][ order id ]`. */
+		final class Ledger {
+			public const LIVE_STATUSES     = array( 'pending', 'authorized', 'captured' );
+			public const COUNTING_STATUSES = array( 'authorized', 'captured' );
+			public static function instance(): self { return new self(); }
+			public function read( $order ): array { return $GLOBALS['sqtwc_ledger_rows'][ $order->get_id() ] ?? array(); }
+			public function find( $order, string $id ): ?array {
+				foreach ( $this->read( $order ) as $row ) { if ( ( $row['id'] ?? '' ) === $id ) { return $row; } }
+				return null;
+			}
+		}
+	}
+}
+
 namespace {
 	if ( ! function_exists( 'wcpos_pro_payment_id_for_action' ) ) {
 		function wcpos_pro_payment_id_for_action( string $provider, string $ref ): ?string {
 			$GLOBALS['sqtwc_adoption_lookups'][] = array( $provider, $ref );
 			return $GLOBALS['sqtwc_adopted'][ $ref ] ?? null;
+		}
+	}
+	if ( ! function_exists( 'wcpos_pro_order_pay_panel' ) ) {
+		function wcpos_pro_order_pay_panel( $gateway, $order ): void { $GLOBALS['sqtwc_pro_panels'][] = $order->get_id(); echo '<div id="wcpos-pro-order-pay-panel"></div>'; }
+		function wcpos_pro_order_pay_process( $order ): array { $GLOBALS['sqtwc_pro_process'][] = $order->get_id(); return $GLOBALS['sqtwc_pro_process_result'] ?? array( 'result' => 'success', 'redirect' => '/pro' ); }
+		function wcpos_pro_order_pay_refund( $order, $amount, string $reason = '' ) { $GLOBALS['sqtwc_pro_refunds'][] = array( $order->get_id(), $amount, $reason ); return $GLOBALS['sqtwc_pro_refund_result'] ?? true; }
+		function wcpos_pro_adopt_legacy_attempt( $order, string $gateway_id, string $ref, string $amount, string $currency ) {
+			$GLOBALS['sqtwc_pro_adoptions'][] = array( $order->get_id(), $gateway_id, $ref, $amount, $currency );
+			if ( isset( $GLOBALS['sqtwc_pro_adopt_result'] ) ) { return $GLOBALS['sqtwc_pro_adopt_result']; }
+			$id = 'row-' . count( $GLOBALS['sqtwc_pro_adoptions'] );
+			$GLOBALS['sqtwc_adopted'][ $ref ] = $id;
+			return array( 'id' => $id, 'status' => 'pending' );
 		}
 	}
 	if ( ! function_exists( 'wp_schedule_single_event' ) ) {
