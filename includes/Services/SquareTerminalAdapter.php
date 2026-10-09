@@ -145,13 +145,17 @@ final class SquareTerminalAdapter {
 		);
 		$response = $this->client->refunds->refundPayment( $request, $options );
 		$refund   = $response->getRefund();
+		if ( ! $refund || '' === (string) $refund->getId() ) {
+			// A success with no refund in it says nothing: the caller treats it as unanswered.
+			throw new \UnexpectedValueException( 'Square answered the refund without a refund object.' );
+		}
 
 		return array(
-			'id'         => $refund ? $refund->getId() : null,
-			'status'     => $refund ? $refund->getStatus() : null,
-			'payment_id' => $refund ? $refund->getPaymentId() : null,
-			'amount'     => $refund && $refund->getAmountMoney() ? $refund->getAmountMoney()->getAmount() : null,
-			'currency'   => $refund && $refund->getAmountMoney() ? $refund->getAmountMoney()->getCurrency() : null,
+			'id'         => $refund->getId(),
+			'status'     => $refund->getStatus(),
+			'payment_id' => $refund->getPaymentId(),
+			'amount'     => $refund->getAmountMoney() ? $refund->getAmountMoney()->getAmount() : null,
+			'currency'   => $refund->getAmountMoney() ? $refund->getAmountMoney()->getCurrency() : null,
 		);
 	}
 

@@ -301,6 +301,17 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'] );
 	}
 
+	public function test_a_refund_answer_without_a_refund_object_is_unanswered(): void {
+		$refund = $this->refund_record();
+		$this->square->queue = array( self::json( 200, array() ) );
+		$this->assertSame( array( 'status' => 'pending', 'provider_ref' => null ), $this->adapter()->refund( $this->row(), 501, '5.00' ) );
+		$this->assertCount( 1, $GLOBALS['sqtwc_single_events'], 'The re-ask is scheduled' );
+		$this->square->queue = array( self::json( 200, array() ) );
+		Refund_Reask::run( 501, 1, 99, $this->adapter() );
+		$this->assertSame( '', $refund->get_meta( Refund_Reask::META_REFUND ), 'Nothing is recorded as confirmed' );
+		$this->assertSame( array( 501, 2, 99 ), end( $GLOBALS['sqtwc_single_events'] )['args'] );
+	}
+
 	public function test_a_record_deleted_before_square_answered_is_reported_on_its_order(): void {
 		$this->refund_record();
 		$this->square->queue = array( self::lost() );
