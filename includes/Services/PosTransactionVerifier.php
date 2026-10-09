@@ -28,7 +28,7 @@ final class PosTransactionVerifier {
 	/**
 	 * Verify completed card payments belonging to a Square Order.
 	 *
-	 * @return array{payment_ids:array<int,string>,amount:int,currency:string,location_id:string}
+	 * @return array{payment_ids:array<int,string>,amount:int,currency:string,location_id:string,notes:array<int,string>}
 	 */
 	public function verify( string $transaction_id ): array {
 		$response = $this->client->orders->get( new GetOrdersRequest( array( 'orderId' => $transaction_id ) ) );
@@ -38,6 +38,7 @@ final class PosTransactionVerifier {
 		}
 
 		$payment_ids = array();
+		$notes       = array();
 		$amount      = 0;
 		$currency    = '';
 		foreach ( $order->getTenders() ?? array() as $tender ) {
@@ -65,6 +66,8 @@ final class PosTransactionVerifier {
 			$currency      = $payment_currency;
 			$amount       += (int) $money->getAmount();
 			$payment_ids[] = $payment_id;
+			// The hand-off names the WooCommerce order in the payment's note; it ties the payment to it.
+			$notes[] = (string) $payment->getNote();
 		}
 
 		if ( empty( $payment_ids ) ) {
@@ -76,6 +79,7 @@ final class PosTransactionVerifier {
 			'amount'      => $amount,
 			'currency'    => $currency,
 			'location_id' => (string) $order->getLocationId(),
+			'notes'       => $notes,
 		);
 	}
 }

@@ -14,7 +14,7 @@ Collect WooCommerce order payments on [Square Terminal](https://squareup.com/har
 - A per-order **Payment Log** and order notes record each meaningful Square step and outcome.
 - The Square SDK is namespace-scoped with [PHP-Scoper](https://github.com/humbug/php-scoper) so it cannot clash with other plugins.
 
-> **Scope of v0.1:** payment collection only. Refunds are not yet supported, but Square identifiers are stored on the order so refund support can be added later.
+> **Refunds:** a payment WCPOS Pro's ledger holds (taken through Pro's panel or the POS tile) is refunded from the WooCommerce order, through Pro to Square. A payment this plugin's own panel completed is refunded from the Square dashboard; its Square identifiers are on the order.
 
 ## Requirements
 

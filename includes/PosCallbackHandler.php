@@ -122,9 +122,10 @@ final class PosCallbackHandler {
 						throw new \RuntimeException( 'WooCommerce order disappeared during verification.' );
 					}
 					if ( $locked_order->is_paid() ) {
-						// Verified, and not another order's, at this location, in this currency: a second
-						// charge on this order, noted once. Anything else is some other order's payment.
-						if ( ! self::belongs_elsewhere( $callback['transaction_id'], $order_id ) && (string) ( $verified['location_id'] ?? '' ) === Settings::get_location_id() && $locked_order->get_currency() === (string) ( $verified['currency'] ?? '' ) ) {
+						// Verified, naming this order in its note (the hand-off writes "Order #<number>"), not
+						// another order's, at this location, in this currency: a second charge on this order,
+						// noted once. Anything else is some other order's payment, or no evidence at all.
+						if ( self::names_order( (array) ( $verified['notes'] ?? array() ), $locked_order ) && ! self::belongs_elsewhere( $callback['transaction_id'], $order_id ) && (string) ( $verified['location_id'] ?? '' ) === Settings::get_location_id() && $locked_order->get_currency() === (string) ( $verified['currency'] ?? '' ) ) {
 							self::note_return_on_paid_order( $locked_order, $callback['transaction_id'] );
 						}
 						return 'completed';
@@ -253,6 +254,23 @@ final class PosCallbackHandler {
 		/* translators: %s: Square transaction id. */
 		$order->add_order_note( sprintf( __( 'Square Point of Sale reported transaction %s for an order that was already paid. Check the Square dashboard for a second charge.', 'square-terminal-for-woocommerce' ), $transaction_id ) );
 		$order->save();
+	}
+
+	/**
+	 * Whether a payment note written by the hand-off names this order ("Order #<number>").
+	 *
+	 * @param string[] $notes Payment notes.
+	 * @param object   $order WooCommerce order.
+	 */
+	private static function names_order( array $notes, $order ): bool {
+		$needle = 'Order #' . $order->get_order_number();
+		foreach ( $notes as $note ) {
+			if ( 1 === preg_match( '/' . preg_quote( $needle, '/' ) . '(?!\d)/', (string) $note ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

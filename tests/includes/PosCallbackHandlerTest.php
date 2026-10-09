@@ -13,6 +13,7 @@ final class StubPosVerifier {
 		'amount'      => 1234,
 		'currency'    => 'USD',
 		'location_id' => 'LOC',
+		'notes'       => array( 'Order #99 – Shop' ),
 	);
 	public function verify( string $transaction_id ): array {
 		++$this->calls;
@@ -213,6 +214,13 @@ final class PosCallbackHandlerTest extends TestCase {
 		$this->verifier->result['currency'] = 'EUR';
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_eur', 'state' => $this->state() ) ) ) );
 		$this->verifier->result['currency'] = 'USD';
+		// A real unclaimed transaction that does not name this order (another sale, or a guess by an
+		// order-key holder) is no evidence of a second charge here.
+		$this->verifier->result['notes'] = array( 'Order #990 – Shop' );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_unrelated', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array();
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_noteless', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array( 'Order #99 – Shop' );
 		self::assertSame( array(), $other->notes );
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_second', 'state' => $this->state() ) ) ) );
 		self::assertSame( '/thank-you', $url );
