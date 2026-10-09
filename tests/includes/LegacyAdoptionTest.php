@@ -45,6 +45,12 @@ final class LegacyAdoptionTest extends TestCase {
 		self::assertFalse( Legacy_Adoption::is_deferral( $held ), 'The upgrade pass drops it; the sweep closes it' );
 		$old->meta['_sqtwc_checkout_status'] = 'CANCELED';
 		self::assertNull( Legacy_Adoption::adopt_order( 4 ), 'Read and ended: nothing to hold' );
+		// An adopted checkout Pro still owns is never held, however old: Pro's panel has its controls.
+		$owned = $this->order( 44, 'TC44' );
+		Legacy_Adoption::adopt_order( 44 );
+		$GLOBALS['sqtwc_ledger_rows'][44] = array( array( 'id' => 'row-' . count( $GLOBALS['sqtwc_pro_adoptions'] ), 'status' => 'pending' ) );
+		$owned->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertNull( Legacy_Adoption::adopt_order( 44 ), 'Owned by Pro: the panel renders' );
 		// Live and recent when read before the locks; the copy under them shows the pointer aged out
 		// (a retry of a lost create kept the first start time): held, not adopted.
 		$aging = $this->order( 6 );
@@ -61,7 +67,7 @@ final class LegacyAdoptionTest extends TestCase {
 		} finally {
 			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
 		}
-		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+		self::assertCount( 1, $GLOBALS['sqtwc_pro_adoptions'], 'Only the owned order 44 was ever adopted here' );
 		$unknown = $this->order( 5 );
 		unset( $unknown->meta['_sqtwc_attempt_started'] );
 		self::assertSame( '', Legacy_Adoption::action_ref( $unknown ), 'No start time, no adoption' );

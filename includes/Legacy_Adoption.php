@@ -285,7 +285,9 @@ final class Legacy_Adoption {
 			return null;
 		}
 		$ref = self::action_ref( $order );
-		if ( '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) ) {
+		if ( '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) && ! self::owns_checkout( $order, (string) $order->get_meta( '_sqtwc_checkout_id', true ) ) ) {
+			// Unknown outcome and nobody's: held. A checkout Pro owns renders Pro's panel, whose
+			// controls poll and cancel it, however old the pointer is.
 			return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
 		}
 		if ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) {
@@ -313,7 +315,7 @@ final class Legacy_Adoption {
 						return null;
 					}
 					$ref = self::action_ref( $fresh );
-					if ( '' === $ref && ! $fresh->is_paid() && self::has_stale_live_pointer( $fresh ) ) {
+					if ( '' === $ref && ! $fresh->is_paid() && self::has_stale_live_pointer( $fresh ) && ! self::owns_checkout( $fresh, (string) $fresh->get_meta( '_sqtwc_checkout_id', true ) ) ) {
 						return new \WP_Error( 'sqtwc_adoption_stale_attempt', 'An older Square checkout on this order has not been read from Square yet.' );
 					}
 					if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {

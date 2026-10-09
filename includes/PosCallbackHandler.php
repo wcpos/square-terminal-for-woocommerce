@@ -104,8 +104,11 @@ final class PosCallbackHandler {
 			$this->redirect_to_payment( $order, 'error', 'verification_failed' );
 		}
 
-		if ( $order->is_paid() ) {
-			$this->redirect_to_receipt( $order ); // Unverified so far: nothing is written on the strength of it.
+		if ( $order->is_paid() && self::is_known_transaction( $order, $callback['transaction_id'] ) ) {
+			// The transaction that paid it (or one already reported) returning again: the receipt,
+			// with no call to Square. A different transaction on a paid order is a possible second
+			// charge: it is verified below and, if real, noted under the lock.
+			$this->redirect_to_receipt( $order );
 		}
 
 		try {
@@ -231,16 +234,28 @@ final class PosCallbackHandler {
 	 * @param string $transaction_id Square transaction id.
 	 */
 	private static function note_return_on_paid_order( $order, string $transaction_id ): void {
-		$reported = $order->get_meta( '_sqtwc_pos_reported_transaction_ids', true );
-		$reported = is_array( $reported ) ? $reported : array();
-		if ( '' === $transaction_id || $transaction_id === (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) || in_array( $transaction_id, $reported, true ) ) {
+		if ( self::is_known_transaction( $order, $transaction_id ) ) {
 			return; // The transaction that paid it, or one already noted, returning again.
 		}
+		$reported   = $order->get_meta( '_sqtwc_pos_reported_transaction_ids', true );
+		$reported   = is_array( $reported ) ? $reported : array();
 		$reported[] = $transaction_id;
 		$order->update_meta_data( '_sqtwc_pos_reported_transaction_ids', array_slice( $reported, -20 ) );
 		/* translators: %s: Square transaction id. */
 		$order->add_order_note( sprintf( __( 'Square Point of Sale reported transaction %s for an order that was already paid. Check the Square dashboard for a second charge.', 'square-terminal-for-woocommerce' ), $transaction_id ) );
 		$order->save();
+	}
+
+	/**
+	 * Whether this transaction is the one that paid the order, or one already noted as a second charge.
+	 *
+	 * @param object $order          WooCommerce order.
+	 * @param string $transaction_id Square transaction id.
+	 */
+	private static function is_known_transaction( $order, string $transaction_id ): bool {
+		$reported = $order->get_meta( '_sqtwc_pos_reported_transaction_ids', true );
+
+		return '' === $transaction_id || $transaction_id === (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) || in_array( $transaction_id, is_array( $reported ) ? $reported : array(), true );
 	}
 
 	/** Redirect back to the authenticated order-pay page. */

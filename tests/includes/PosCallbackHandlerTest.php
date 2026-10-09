@@ -189,17 +189,30 @@ final class PosCallbackHandlerTest extends TestCase {
 			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
 		}
 		self::assertCount( 1, $order->notes );
-		// Already paid before any verification: the order key alone writes nothing.
+		// Already paid, and a different transaction returns: verified first, then noted; the order key
+		// alone writes nothing (a verification that fails writes the failure note only).
 		$other = new \SQTWC_Test_Order( 99 );
 		$other->key = 'order-key';
 		$other->paid = true;
+		$other->meta['_sqtwc_pos_transaction_id'] = 'txn_first';
 		$GLOBALS['sqtwc_orders'][99] = $other;
+		$this->verifier->result['throw'] = true;
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );
-		self::assertSame( array(), $other->notes );
+		self::assertStringNotContainsString( 'attacker-value', implode( "\n", $other->notes ) );
+		$this->verifier->result['throw'] = false;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_second', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertStringContainsString( 'transaction txn_second for an order that was already paid', implode( "\n", $other->notes ) );
+		self::assertSame( 0, $other->payment_complete_calls );
+		// The transaction that paid it returning again: the receipt, with no call to Square.
+		$calls = $this->verifier->calls;
+		self::assertSame( '/thank-you', $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_first', 'state' => $this->state() ) ) ) ) );
+		self::assertSame( $calls, $this->verifier->calls );
 	}
 
 	public function test_already_paid_order_redirects_to_receipt_without_recompletion(): void {
 		$this->order->paid = true;
+		$this->order->meta['_sqtwc_pos_transaction_id'] = 'attacker-value';
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );
 		self::assertSame( '/thank-you', $url );
 		self::assertSame( 0, $this->order->payment_complete_calls );
