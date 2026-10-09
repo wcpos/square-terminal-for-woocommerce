@@ -245,6 +245,8 @@ class Gateway extends \WC_Payment_Gateway {
 			'gatewayId'       => self::ID,
 			'environment'     => $environment,
 			'collectionMethod' => $collection_method,
+			// A live WCPOS Pro payment on the order: the hand-off button stays off whatever the return URL says.
+			'posBlocked'      => $order && 'pos_app' === $collection_method && Legacy_Adoption::pro_has_live_row( $order ) ? __( 'WooCommerce POS is taking a payment on this order. Finish or cancel it there before using the Square POS app.', 'square-terminal-for-woocommerce' ) : '',
 			'devices'         => 'terminal' === $collection_method ? self::get_available_devices( $environment ) : array(),
 			'defaultDeviceId' => (string) Settings::get( 'default_device_id', '' ),
 			'debugLog'        => 'yes' === Settings::get( 'checkout_debug_logs', 'no' ),

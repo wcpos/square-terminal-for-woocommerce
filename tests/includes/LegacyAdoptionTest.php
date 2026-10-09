@@ -45,6 +45,23 @@ final class LegacyAdoptionTest extends TestCase {
 		self::assertFalse( Legacy_Adoption::is_deferral( $held ), 'The upgrade pass drops it; the sweep closes it' );
 		$old->meta['_sqtwc_checkout_status'] = 'CANCELED';
 		self::assertNull( Legacy_Adoption::adopt_order( 4 ), 'Read and ended: nothing to hold' );
+		// Live and recent when read before the locks; the copy under them shows the pointer aged out
+		// (a retry of a lost create kept the first start time): held, not adopted.
+		$aging = $this->order( 6 );
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $aging ) {
+			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held ) {
+				$fresh = clone $aging;
+				$fresh->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+				return $fresh;
+			}
+			return $aging;
+		};
+		try {
+			self::assertSame( 'sqtwc_adoption_stale_attempt', Legacy_Adoption::adopt_order( 6 )->get_error_code() );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
 		$unknown = $this->order( 5 );
 		unset( $unknown->meta['_sqtwc_attempt_started'] );
 		self::assertSame( '', Legacy_Adoption::action_ref( $unknown ), 'No start time, no adoption' );

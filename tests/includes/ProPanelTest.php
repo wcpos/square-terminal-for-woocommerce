@@ -248,8 +248,10 @@ final class ProPanelTest extends TestCase {
 		$html = Gateway::render_payment_ui( 99 );
 		self::assertStringContainsString( 'data-sqtwc-action="pos-open" disabled', $html );
 		self::assertStringContainsString( 'WooCommerce POS is taking a payment on this order', $html );
+		self::assertStringContainsString( 'WooCommerce POS is taking a payment', Gateway::get_localized_payment_data()['posBlocked'], 'The script keeps the button off on any return URL' );
 		$GLOBALS['sqtwc_ledger_rows'][99] = array();
 		self::assertStringNotContainsString( 'disabled', Gateway::render_payment_ui( 99 ) );
+		self::assertSame( '', Gateway::get_localized_payment_data()['posBlocked'] );
 	}
 
 	public function test_old_cashier_assets_are_not_loaded_under_pros_panel(): void {

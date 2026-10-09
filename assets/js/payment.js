@@ -1135,6 +1135,13 @@
 				setPosStatus(strings.posMissingConfig, 'warning');
 				return;
 			}
+			if (config.posBlocked) {
+				// WooCommerce POS is driving a payment on this order: no second charge from the app,
+				// whatever result the return URL carries.
+				disable(button, true);
+				setPosStatus(config.posBlocked, 'warning');
+				return;
+			}
 
 			if (params.sqtwc_pos_result === 'partial') {
 				disable(button, true);
