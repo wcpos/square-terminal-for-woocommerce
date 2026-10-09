@@ -3,3 +3,4 @@
 /build/
 /tools/php-scoper.phar
 .phpunit.cache/
+.wp-env.override.json

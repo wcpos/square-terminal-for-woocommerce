@@ -72,7 +72,7 @@ if ( ! function_exists( 'wp_die' ) ) { function wp_die( $message = '', $title = 
 if ( ! function_exists( 'wp_remote_post' ) ) { function wp_remote_post( $url, $args = array() ) { $GLOBALS['sqtwc_remote_posts'][] = array( 'url' => $url, 'args' => $args ); return $GLOBALS['sqtwc_remote_post_response'] ?? array( 'body' => '', 'response' => array( 'code' => 200 ) ); } }
 if ( ! function_exists( 'wp_remote_retrieve_body' ) ) { function wp_remote_retrieve_body( $response ) { return is_array( $response ) ? (string) ( $response['body'] ?? '' ) : ''; } }
 if ( ! function_exists( 'is_wp_error' ) ) { function is_wp_error( $thing ) { return $thing instanceof \WP_Error; } }
-if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; public function __construct( $code = '', $message = '' ) { $this->message = (string) $message; } } }
+if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; public string $code; public $data; public function __construct( $code = '', $message = '', $data = null ) { $this->code = (string) $code; $this->message = (string) $message; $this->data = $data; } public function get_error_code() { return $this->code; } public function get_error_message() { return $this->message; } public function get_error_data() { return $this->data; } } }
 // Stands in for the official WooCommerce Square plugin's global accessor.
 if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
 class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }

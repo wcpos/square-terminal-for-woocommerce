@@ -56,6 +56,34 @@ To produce the scoped vendor bundle used in distributable builds:
 composer run build:scoped-vendor
 ```
 
+## WCPOS Pro 2.0 payments base
+
+With WCPOS Pro 2.0 active, the plugin registers a server adapter (`includes/Server/`) with Pro's shared payments base, so the POS app can drive a paired Square Terminal through Pro's ledger: one checkout per ledger row (the row id is Square's idempotency key and the checkout's reference id), polling and cancellation through Square's Terminal API, refunds through Square's Refunds API, and `terminal.checkout.updated` webhooks delivered to Pro's route. The adapter is inert without a compatible Pro; the order-pay page below is unchanged for now.
+
+Facts the adapter rests on, and what they mean for the store:
+
+- A Square checkout has no decline state. A declined card leaves the checkout in progress for the buyer to try again; the checkout ends completed, or cancelled by the buyer, the seller, or the five-minute deadline. The adapter reports a checkout that ended after a decline as a failed payment with the card's reason, never as the cashier's cancellation.
+- Money is read from the payment, never from the checkout. A cancelled checkout whose payment was captured (it timed out at the receipt screen) is money; a completed checkout whose payment cannot be read yet settles nothing until it can.
+- A reference carries its environment. A sandbox checkout is polled, cancelled and refunded with the sandbox token even after the gateway is switched to production.
+- A refund request Square did not answer keeps its WooCommerce refund record as pending, carrying the idempotency key saved before the request, and is asked about again every two minutes (up to five times) under that same key; Square hands back the refund the first request made, so no second refund is possible. Staff are told to check the Square dashboard if Square never answers.
+- Square webhooks for Pro must be subscribed at the URL `Settings::get_pro_webhook_url()` names (Pro's `wcpos/v2/payments/webhook` route with `provider=square`), with that subscription's signature key entered in the gateway settings. Square signs over the exact registered URL and gives every subscription its own key, and the plugin holds one key, so the old route and Pro's route cannot both verify at once: until the order-pay page moves onto Pro's panel, keep the old subscription; Pro's polling settles its own payments without the webhook. The notification URL override does not apply to Pro's route.
+
+### Conformance suite
+
+Pro's provider conformance suite (`tests/conformance/`) runs the real adapter over a scripted Square (a PSR-18 client behind the `sqtwc_square_http_client` filter) under wp-env with the sibling Pro checkout, and compares the recorded transcripts in `tests/conformance/transcripts/`. It needs Docker, a sibling checkout at `../woocommerce-pos-pro` on `next` with its Composer dependencies installed, and this plugin installed **without** dev packages (its PHPUnit 10 cannot share a process with Pro's PHPUnit 9):
+
+```bash
+composer install --no-dev
+npx wp-env start
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- ../woocommerce-pos-pro/vendor/bin/phpunit -c phpunit.conformance.xml.dist
+```
+
+A missing transcript fails. To record one, set the opt-in inside the PHPUnit process (wp-env forwards no host variables), review the JSON, rerun without it, then commit:
+
+```bash
+npx wp-env run --env-cwd="wp-content/plugins/$(basename "$PWD")" tests-cli -- env WCPOS_RECORD_TRANSCRIPTS=1 ../woocommerce-pos-pro/vendor/bin/phpunit -c phpunit.conformance.xml.dist
+```
+
 ## Releases
 
 Releases are automated by [`.github/workflows/release.yml`](.github/workflows/release.yml). When the `Version:` header in `square-terminal-for-woocommerce.php` changes on `main`, the workflow builds the scoped, packaged plugin and publishes it as a `vX.Y.Z` GitHub Release with a `square-terminal-for-woocommerce.zip` asset. It can also be run manually from the **Actions** tab.

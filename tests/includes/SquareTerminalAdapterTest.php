@@ -97,6 +97,7 @@ final class SquareTerminalAdapterTest extends TestCase {
 				'updated_at'    => '2026-07-16T10:00:00Z',
 				'created_at'    => null,
 				'cancel_reason' => null,
+				'device_id'     => 'DEVICE123',
 			),
 			$result
 		);
@@ -121,6 +122,13 @@ final class SquareTerminalAdapterTest extends TestCase {
 				'tip_amount'     => 246,
 				'tip_currency'   => 'USD',
 				'card_status'    => null,
+				'card_brand'     => null,
+				'card_last4'     => null,
+				'entry_method'   => null,
+				'auth_code'      => null,
+				'error_code'     => null,
+				'receipt_number' => null,
+				'reference_id'   => null,
 			),
 			$result
 		);
