@@ -214,6 +214,16 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( 'expired', $this->adapter()->fetch( 'sandbox:TC1' )['status'] );
 	}
 
+	public function test_an_approved_second_card_outranks_a_declined_first_one(): void {
+		// First card declined, second card approved and not yet completed when the checkout timed out:
+		// the decline must not end the leg while the second payment may still become money.
+		$this->square->queue = array( self::checkout( 'CANCELED', array( 'PAY1', 'PAY2' ), 'TIMED_OUT' ), self::payment( 'FAILED' ), self::payment( 'APPROVED' ) );
+		$error = $this->adapter()->fetch( 'sandbox:TC1' );
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertTrue( $error->get_error_data()['indeterminate'] );
+		$this->assertCount( 3, $this->square->requests, 'Every listed payment is read before judging' );
+	}
+
 	public function test_a_completed_checkout_whose_payment_cannot_be_read_settles_nothing(): void {
 		$this->square->queue = array( self::checkout( 'COMPLETED', array( 'PAY1' ) ), self::error( 503, 'SERVICE_UNAVAILABLE' ) );
 		$error = $this->adapter()->fetch( 'sandbox:TC1' );
