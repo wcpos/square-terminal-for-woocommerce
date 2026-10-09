@@ -66,8 +66,10 @@ final class PosTransactionVerifier {
 			$currency      = $payment_currency;
 			$amount       += (int) $money->getAmount();
 			$payment_ids[] = $payment_id;
-			// The hand-off names the WooCommerce order in the payment's note; it ties the payment to it.
+			// The hand-off names the WooCommerce order in the note; Square may keep it on the payment
+			// or on the tender, so both are read. It ties the payment to the order.
 			$notes[] = (string) $payment->getNote();
+			$notes[] = (string) $tender->getNote();
 		}
 
 		if ( empty( $payment_ids ) ) {

@@ -218,6 +218,8 @@ final class PosCallbackHandlerTest extends TestCase {
 		// order-key holder) is no evidence of a second charge here.
 		$this->verifier->result['notes'] = array( 'Order #990 – Shop' );
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_unrelated', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['notes'] = array( 'Order #99A – Shop', 'Order #99-3' );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_custom_numbers', 'state' => $this->state() ) ) ) );
 		$this->verifier->result['notes'] = array();
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_noteless', 'state' => $this->state() ) ) ) );
 		$this->verifier->result['notes'] = array( 'Order #99 – Shop' );

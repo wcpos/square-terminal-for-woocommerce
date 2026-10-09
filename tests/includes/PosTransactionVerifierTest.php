@@ -42,7 +42,7 @@ final class PosTransactionVerifierTest extends TestCase {
 		$result = ( new PosTransactionVerifier( (object) array( 'orders' => $orders, 'payments' => $payments ) ) )->verify( 'order_1' );
 		self::assertSame( 'order_1', $orders->request->getOrderId() );
 		self::assertSame( array( 'pay_1' ), $result['payment_ids'] );
-		self::assertSame( array( 'Order #99 – Shop' ), $result['notes'], 'The hand-off note ties the payment to the order' );
+		self::assertSame( array( 'Order #99 – Shop', '' ), $result['notes'], 'The payment note and the tender note both tie the payment to the order' );
 		self::assertSame( 1234, $result['amount'] );
 		self::assertSame( 'USD', $result['currency'] );
 		self::assertSame( 'LOC', $result['location_id'] );
