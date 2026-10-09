@@ -41,6 +41,7 @@ final class ProPanelTest extends TestCase {
 			$order->meta['_sqtwc_checkout_status']    = $status;
 			$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
 			$order->meta['_sqtwc_device_id']          = 'DEV1';
+			$order->meta['_sqtwc_attempt_started']    = time() - 60;
 		}
 		$GLOBALS['sqtwc_orders'][ $id ] = $order;
 		return $order;
@@ -115,6 +116,28 @@ final class ProPanelTest extends TestCase {
 		} );
 	}
 
+	public function test_a_live_pro_row_blocks_an_old_panel_start_under_the_carve_out_too(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
+		$this->order();
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'r1', 'method_id' => 'sqtwc', 'status' => 'pending', 'capture_mode' => 'server' ) );
+		$response = $this->ajax()->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'DEV1' ) );
+		self::assertSame( 409, $response['status'] );
+		self::assertTrue( $response['handled_by_pos'] );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'r1', 'method_id' => 'sqtwc', 'status' => 'voided', 'capture_mode' => 'server' ) );
+		$response = $this->ajax()->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'DEV_GONE' ) );
+		self::assertArrayNotHasKey( 'handled_by_pos', $response, 'An ended Pro leg blocks nothing' );
+	}
+
+	public function test_a_paid_adopted_order_answers_the_receipt_not_a_reload_notice(): void {
+		$order = $this->order( 99, 'TC1', 'IN_PROGRESS' );
+		Legacy_Adoption::adopt_order( 99 );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'captured' ) );
+		$order->paid = true;
+		$response = $this->ajax()->get_terminal_status( array( 'order_id' => 99 ) );
+		self::assertSame( 'COMPLETED', $response['status'] );
+		self::assertArrayNotHasKey( 'handled_by_pos', $response );
+	}
+
 	public function test_under_pros_panel_no_old_panel_start_is_accepted(): void {
 		$this->order();
 		$response = $this->ajax()->create_terminal_checkout( array( 'order_id' => 99, 'device_id' => 'DEV1' ) );
@@ -122,6 +145,42 @@ final class ProPanelTest extends TestCase {
 		self::assertTrue( $response['handled_by_pos'] );
 		self::assertFalse( $response['continue_polling'] );
 		self::assertArrayNotHasKey( '_sqtwc_current_attempt_id', $GLOBALS['sqtwc_orders'][99]->meta, 'No attempt is started' );
+	}
+
+	public function test_a_cancel_that_waited_while_adoption_ran_is_refused_under_the_lock(): void {
+		// Not adopted when the request is authorised; adopted by the time the lock is taken.
+		$order = $this->order( 99, 'TC1', 'IN_PROGRESS' );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'pending' ) );
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $order ) {
+			if ( \WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock::class && '' !== (string) get_option( 'sqtwc_lock_99', '' ) ) {
+				$GLOBALS['sqtwc_adopted']['sandbox:TC1'] = 'row-1';
+				$order->meta[ Legacy_Adoption::META_ADOPTED ] = 'sandbox:TC1';
+			}
+			return $order;
+		};
+		try {
+			$response = $this->ajax()->cancel_terminal_checkout( array( 'order_id' => 99, 'checkout_id' => 'TC1', 'device_id' => 'DEV1' ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertSame( 409, $response['status'] );
+		self::assertTrue( $response['handled_by_pos'] );
+	}
+
+	public function test_the_order_status_cleanup_still_cancels_an_adopted_checkout(): void {
+		$order = $this->order( 99, 'TC1', 'IN_PROGRESS' );
+		Legacy_Adoption::adopt_order( 99 );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'pending' ) );
+		$adapter = new class() {
+			public array $calls = array();
+			public function get_checkout( string $id, array $o = array() ): array { $this->calls[] = 'get'; return array( 'id' => $id, 'status' => 'IN_PROGRESS', 'reference_id' => 'woocommerce_order_99', 'payment_ids' => array() ); }
+			public function cancel_checkout( string $id, array $o = array() ): array { $this->calls[] = 'cancel'; return array( 'id' => $id, 'status' => 'CANCELED', 'cancel_reason' => 'SELLER_CANCELED', 'reference_id' => 'woocommerce_order_99', 'payment_ids' => array() ); }
+		};
+		( new AjaxHandler( $adapter ) )->cancel_terminal_checkout_for_order( $order, 'TC1', 'DEV1' );
+		self::assertContains( 'cancel', $adapter->calls, 'The cleanup cancels the adopted checkout; Pro\'s poll then voids its leg' );
+		// The cashier's own request for the same checkout is refused.
+		$response = ( new AjaxHandler( $adapter ) )->cancel_terminal_checkout_for_order( $order, 'TC1', 'DEV1', array(), true );
+		self::assertSame( 409, $response['status'] );
 	}
 
 	public function test_status_cancel_and_release_of_an_adopted_checkout_answer_409_without_calling_square(): void {
@@ -149,6 +208,18 @@ final class ProPanelTest extends TestCase {
 		self::assertFalse( $result['applied'] );
 		self::assertSame( 'pro_owned', $result['reason'] );
 		self::assertFalse( $order->paid, 'The old webhook, sweep and status check never complete a payment Pro settles' );
+		// Pro captured and completed the order: the old attempt is closed so the sweep's index clears.
+		$order->paid = true;
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'captured' ) );
+		$result = $reconciler->reconcile( $completed, $order );
+		self::assertSame( 'pro_owned', $result['reason'] );
+		self::assertSame( '', $order->meta['_sqtwc_current_attempt_id'] );
+		self::assertSame( '', $order->meta['_sqtwc_checkout_id'] );
+		self::assertSame( 0, $order->payment_complete_calls, 'The old path never completes the order a second time' );
+		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'], 'Unindexed' );
+		$order->paid = false;
+		$order->meta['_sqtwc_checkout_id'] = 'TC1';
+		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
 		// Pro's leg ended without money (voided): the old paths act as before adoption.
 		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'voided' ) );
 		$result = $reconciler->reconcile( $completed, $order );

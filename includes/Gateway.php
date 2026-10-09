@@ -730,7 +730,7 @@ class Gateway extends \WC_Payment_Gateway {
 			if ( is_wp_error( $adopted ) ) {
 				$message = Legacy_Adoption::is_deferral( $adopted )
 					? __( 'Another request is handling this order. Reload the page in a moment.', 'square-terminal-for-woocommerce' )
-					: __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. It ends on its own within five minutes; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+					: __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. Square cancels an unpaid checkout within five minutes and this plugin clears it within about twenty; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
 				echo '<p class="sqtwc-payment__help">' . esc_html( $message ) . '</p>';
 
 				return;

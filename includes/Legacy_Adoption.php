@@ -10,6 +10,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal;
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Square_Server_Provider;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
 
 /**
  * One pass on upgrade, 25 orders per request, from a snapshot of order ids taken when the pass
@@ -44,6 +45,15 @@ final class Legacy_Adoption {
 	private const LIVE_CHECKOUT_STATUSES = array( 'PENDING', 'IN_PROGRESS', 'CANCEL_REQUESTED' );
 
 	/**
+	 * How old an attempt may be and still be adopted: Square cancels an unpaid checkout five
+	 * minutes after its create, and the old sweep reconciles a checkout once it is ten minutes
+	 * old, so a pointer older than an hour names a checkout that has long ended (the sweep
+	 * closes it) or one made under settings since changed (another environment), which Pro could
+	 * neither poll nor cancel. The old sweep stays in charge of those.
+	 */
+	public const ADOPTION_WINDOW = HOUR_IN_SECONDS;
+
+	/**
 	 * The action reference Pro's provider uses for the attempt the old panel started: the
 	 * order's current checkout while it is still live, in the current environment. '' for a
 	 * final checkout or none (an attempt whose create Square never confirmed has no checkout id
@@ -54,7 +64,8 @@ final class Legacy_Adoption {
 	public static function action_ref( $order ): string {
 		$checkout_id = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 		$status      = (string) $order->get_meta( '_sqtwc_checkout_status', true );
-		if ( '' === $checkout_id || ! in_array( $status, self::LIVE_CHECKOUT_STATUSES, true ) ) {
+		$started     = (int) $order->get_meta( '_sqtwc_attempt_started', true );
+		if ( '' === $checkout_id || ! in_array( $status, self::LIVE_CHECKOUT_STATUSES, true ) || $started <= 0 || $started < time() - self::ADOPTION_WINDOW ) {
 			return '';
 		}
 
@@ -107,6 +118,26 @@ final class Legacy_Adoption {
 		$ref     = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
 
 		return self::owned_by_pro( $order, $ref );
+	}
+
+	/**
+	 * Whether Pro's ledger holds a live row (pending, authorized or captured) for this gateway on
+	 * the order: a leg Pro is driving now, adopted or its own. While one exists the old panel must
+	 * not start a checkout beside it, whichever collection method the settings name today.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	public static function pro_has_live_row( $order ): bool {
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return false;
+		}
+		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
+			if ( Gateway::ID === ( $row['method_id'] ?? null ) && in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::LIVE_STATUSES, true ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -226,16 +257,6 @@ final class Legacy_Adoption {
 		return \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::instance()->with_lock(
 			$order_id,
 			static function () use ( $order_id ) {
-				// Read the order under the lock and judge that copy: a live checkout on an order still
-				// waiting for payment, not adopted yet.
-				$fresh = wc_get_order( $order_id );
-				if ( ! $fresh ) {
-					return null;
-				}
-				$ref = self::action_ref( $fresh );
-				if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {
-					return null;
-				}
 				// The old paths complete a paid checkout under their own per-order lock; while one
 				// holds it this attempt is mid-completion, and the caller tries again later. Anything
 				// Pro refuses or throws is final for this order: logged, never retried on every request.
@@ -244,6 +265,16 @@ final class Legacy_Adoption {
 					return new \WP_Error( 'sqtwc_adoption_completing', 'A completion of this payment is in progress.' );
 				}
 				try {
+					// Read the order under BOTH locks, caches cleared, and judge that copy: a completion
+					// that held the old lock a moment ago has written its result by now.
+					$fresh = OrderMeta::reload_order( $order_id );
+					if ( ! $fresh ) {
+						return null;
+					}
+					$ref = self::action_ref( $fresh );
+					if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {
+						return null;
+					}
 					$row = wcpos_pro_adopt_legacy_attempt( $fresh, Gateway::ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
 					if ( is_array( $row ) ) {
 						$fresh->update_meta_data( self::META_ADOPTED, $ref );

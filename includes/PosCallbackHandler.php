@@ -105,6 +105,7 @@ final class PosCallbackHandler {
 		}
 
 		if ( $order->is_paid() ) {
+			self::note_return_on_paid_order( $order, $callback['transaction_id'] );
 			$this->redirect_to_receipt( $order );
 		}
 
@@ -118,6 +119,7 @@ final class PosCallbackHandler {
 						throw new \RuntimeException( 'WooCommerce order disappeared during verification.' );
 					}
 					if ( $locked_order->is_paid() ) {
+						self::note_return_on_paid_order( $locked_order, $callback['transaction_id'] );
 						return 'completed';
 					}
 
@@ -219,6 +221,22 @@ final class PosCallbackHandler {
 		}
 
 		return (string) get_option( $option_name, '' ) === (string) $order_id;
+	}
+
+	/**
+	 * A Square Point of Sale transaction came back for an order that is already paid (by WCPOS
+	 * Pro's panel, or another path): the money may have been taken twice, and the order says so.
+	 *
+	 * @param object $order          WooCommerce order.
+	 * @param string $transaction_id Square transaction id.
+	 */
+	private static function note_return_on_paid_order( $order, string $transaction_id ): void {
+		if ( '' === $transaction_id || $transaction_id === (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
+			return; // The transaction that paid it, returning again.
+		}
+		/* translators: %s: Square transaction id. */
+		$order->add_order_note( sprintf( __( 'Square Point of Sale reported transaction %s for an order that was already paid. Check the Square dashboard for a second charge.', 'square-terminal-for-woocommerce' ), $transaction_id ) );
+		$order->save();
 	}
 
 	/** Redirect back to the authenticated order-pay page. */

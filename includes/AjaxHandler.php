@@ -83,6 +83,11 @@ final class AjaxHandler {
 		if ( $order->is_paid() ) {
 			return $this->error_response( 409, __( 'This order is already paid.', 'square-terminal-for-woocommerce' ) );
 		}
+		if ( Legacy_Adoption::pro_has_live_row( $order ) ) {
+			// Pro is driving a payment on this order (the collection method changed under a live leg,
+			// or a stale tab): no second checkout beside it.
+			return $this->handled_by_pos_response();
+		}
 
 		$recorded_payment_ids = $order->get_meta( '_sqtwc_payment_ids', true );
 		if ( (int) $order->get_meta( '_sqtwc_collected_amount', true ) > 0 || ( is_array( $recorded_payment_ids ) && ! empty( $recorded_payment_ids ) ) ) {
@@ -198,10 +203,8 @@ final class AjaxHandler {
 		return $this->with_fresh_order_lock(
 			$authorized['order']->get_id(),
 			function ( $order ) use ( $request ): array {
-				if ( Legacy_Adoption::owns_order( $order ) ) {
-					return $this->handled_by_pos_response(); // Pro polls and cancels its own leg.
-				}
 				if ( $order->is_paid() ) {
+					// Paid, by Pro or anyone: the receipt, not a reload notice.
 					return $this->with_redirect(
 						array(
 							'status'           => 'COMPLETED',
@@ -210,6 +213,9 @@ final class AjaxHandler {
 						),
 						$order
 					);
+				}
+				if ( Legacy_Adoption::owns_order( $order ) ) {
+					return $this->handled_by_pos_response(); // Pro polls and cancels its own leg.
 				}
 
 				$cached_status = (string) $order->get_meta( '_sqtwc_checkout_status', true );
@@ -246,30 +252,41 @@ final class AjaxHandler {
 		if ( isset( $authorized['error'] ) ) {
 			return $authorized['error'];
 		}
-		if ( Legacy_Adoption::owns_order( $authorized['order'] ) ) {
-			return $this->handled_by_pos_response(); // The order-status cleanup still cancels through cancel_terminal_checkout_for_order().
-		}
-
+		// Judged under the lock, on the fresh order: a tab that passed a check before the lock may
+		// have waited while adoption made the checkout Pro's.
 		return $this->cancel_terminal_checkout_for_order(
 			$authorized['order'],
 			(string) $request['checkout_id'],
-			(string) $request['device_id']
+			(string) $request['device_id'],
+			array(),
+			true
 		);
 	}
 
 	/**
 	 * Execute compare-before-cancel for an already-authorized order.
 	 *
-	 * @param object              $order       WooCommerce order.
-	 * @param string              $checkout_id Square checkout ID.
-	 * @param string              $device_id   Square device ID.
-	 * @param array<string,mixed> $options     SDK request options.
+	 * @param object              $order        WooCommerce order.
+	 * @param string              $checkout_id  Square checkout ID.
+	 * @param string              $device_id    Square device ID.
+	 * @param array<string,mixed> $options      SDK request options.
+	 * @param bool                $from_cashier True for the old panel's own request, which may not cancel a
+	 *                                          checkout WCPOS Pro owns; the order-status cleanup passes false
+	 *                                          and cancels an adopted checkout too (Pro voids only on
+	 *                                          cancelled/failed, and an open checkout on an order paid
+	 *                                          another way is a charge waiting for a tap).
 	 * @return array<string,mixed>
 	 */
-	public function cancel_terminal_checkout_for_order( $order, string $checkout_id, string $device_id, array $options = array() ): array {
+	public function cancel_terminal_checkout_for_order( $order, string $checkout_id, string $device_id, array $options = array(), bool $from_cashier = false ): array {
 		return $this->with_fresh_order_lock(
 			$order->get_id(),
-			fn( $fresh_order ) => $this->cancel_terminal_checkout_locked( $fresh_order, $checkout_id, $device_id, $options )
+			function ( $fresh_order ) use ( $checkout_id, $device_id, $options, $from_cashier ): array {
+				if ( $from_cashier && Legacy_Adoption::owns_order( $fresh_order ) ) {
+					return $this->handled_by_pos_response();
+				}
+
+				return $this->cancel_terminal_checkout_locked( $fresh_order, $checkout_id, $device_id, $options );
+			}
 		);
 	}
 

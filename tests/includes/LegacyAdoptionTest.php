@@ -30,8 +30,34 @@ final class LegacyAdoptionTest extends TestCase {
 		$order->meta['_sqtwc_checkout_id']     = $checkout;
 		$order->meta['_sqtwc_checkout_status'] = $status;
 		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
+		$order->meta['_sqtwc_attempt_started']    = time() - 60;
 		$GLOBALS['sqtwc_orders'][ $id ] = $order;
 		return $order;
+	}
+
+	public function test_an_attempt_older_than_the_window_is_the_old_sweeps_not_pros(): void {
+		$old = $this->order( 4 );
+		$old->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertSame( '', Legacy_Adoption::action_ref( $old ) );
+		self::assertNull( Legacy_Adoption::adopt_order( 4 ) );
+		$unknown = $this->order( 5 );
+		unset( $unknown->meta['_sqtwc_attempt_started'] );
+		self::assertSame( '', Legacy_Adoption::action_ref( $unknown ), 'No start time, no adoption' );
+	}
+
+	public function test_a_deferred_order_stays_in_the_queue_and_the_pass_is_not_done(): void {
+		$this->order( 300, 'TC300' );
+		$this->order( 301, 'TC301' );
+		$GLOBALS['sqtwc_order_query_results'] = array( 300, 301 );
+		add_option( 'sqtwc_lock_300', 'till|' . time(), '', 'no' ); // A completion in flight on 300.
+		Legacy_Adoption::upgrade();
+		self::assertSame( array( 300 => 1 ), get_option( 'sqtwc_adoption_queue' ) );
+		self::assertFalse( get_option( 'sqtwc_adoption_version' ) );
+		self::assertCount( 1, $GLOBALS['sqtwc_pro_adoptions'] );
+		delete_option( 'sqtwc_lock_300' );
+		Legacy_Adoption::upgrade();
+		self::assertCount( 2, $GLOBALS['sqtwc_pro_adoptions'] );
+		self::assertSame( Legacy_Adoption::VERSION, get_option( 'sqtwc_adoption_version' ) );
 	}
 
 	public function test_a_live_checkout_is_the_action_in_the_current_environment_and_a_final_one_is_nothing(): void {
@@ -69,7 +95,7 @@ final class LegacyAdoptionTest extends TestCase {
 		self::assertTrue( Legacy_Adoption::is_deferral( $deferred ) );
 		$GLOBALS['sqtwc_free_lock_held'] = false;
 		// The old paths' own lock held: a completion in flight.
-		add_option( 'sqtwc_lock_10', 'someone:' . time(), '', 'no' );
+		add_option( 'sqtwc_lock_10', 'someone|' . time(), '', 'no' );
 		$completing = Legacy_Adoption::adopt_order( 10 );
 		self::assertSame( 'sqtwc_adoption_completing', $completing->get_error_code() );
 		self::assertTrue( Legacy_Adoption::is_deferral( $completing ) );
@@ -83,8 +109,14 @@ final class LegacyAdoptionTest extends TestCase {
 	public function test_the_fresh_copy_under_the_lock_decides(): void {
 		// The order read before the lock is live; the copy read under it is paid: nothing applies.
 		$stale = $this->order( 11 );
+		$GLOBALS['sqtwc_cleaned_post_caches']      = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( int $id ): void {
+			$GLOBALS['sqtwc_cleaned_post_caches'][] = $id;
+		};
 		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $stale ) {
-			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held ) {
+			// Fresh only to a read made under both locks with the caches cleared first (the copy a
+			// completion that just released the old lock wrote); a plain read returns the stale copy.
+			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held && '' !== (string) get_option( 'sqtwc_lock_11', '' ) && in_array( 11, $GLOBALS['sqtwc_cleaned_post_caches'] ?? array(), true ) ) {
 				$fresh = clone $stale;
 				$fresh->paid = true;
 				return $fresh;
@@ -94,7 +126,7 @@ final class LegacyAdoptionTest extends TestCase {
 		try {
 			self::assertNull( Legacy_Adoption::adopt_order( 11 ) );
 		} finally {
-			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'], $GLOBALS['sqtwc_clean_post_cache_callback'] );
 		}
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
 	}

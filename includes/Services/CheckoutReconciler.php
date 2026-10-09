@@ -61,6 +61,14 @@ final class CheckoutReconciler {
 		// alone: the old webhook, sweep and status check must not complete or close it a second
 		// time. Once Pro's leg has ended without money, these paths act again, as before.
 		if ( Legacy_Adoption::owns_checkout( $order, $checkout_id ) ) {
+			if ( $order->is_paid() && ! $is_abandoned && $checkout_id === (string) $order->get_meta( '_sqtwc_checkout_id', true ) ) {
+				// Pro settled it and completed the order: the old attempt is finished too. Closing it
+				// clears the pointer and the sweep's index, so finished adopted checkouts do not sit at
+				// the head of the index for ever and starve newer orders of the sweep.
+				OrderMeta::close_current_attempt( $order, 'COMPLETED' );
+				$order->save();
+			}
+
 			return $this->ignored( $order, 'pro_owned' );
 		}
 
