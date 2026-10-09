@@ -200,9 +200,19 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertSame( '/thank-you', $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) ) );
 		self::assertSame( array(), $other->notes, 'A failed verification on an order paid on arrival writes nothing on the order' );
 		$this->verifier->result['throw'] = false;
-		// A real transaction that belongs to another order is that order's payment, not a second charge here.
+		// A real transaction that belongs to another order is that order's payment, not a second charge here:
+		// claimed by another order, recorded on another order, taken at another location, or in another currency.
 		$GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'txn_other' ) ] = '77';
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_other', 'state' => $this->state() ) ) ) );
+		$GLOBALS['sqtwc_order_query_results'] = array( 78 );
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_recorded_elsewhere', 'state' => $this->state() ) ) ) );
+		$GLOBALS['sqtwc_order_query_results'] = array();
+		$this->verifier->result['location_id'] = 'OTHER_LOC';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_elsewhere', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['location_id'] = 'LOC';
+		$this->verifier->result['currency'] = 'EUR';
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_eur', 'state' => $this->state() ) ) ) );
+		$this->verifier->result['currency'] = 'USD';
 		self::assertSame( array(), $other->notes );
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_second', 'state' => $this->state() ) ) ) );
 		self::assertSame( '/thank-you', $url );
