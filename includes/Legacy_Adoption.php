@@ -121,6 +121,28 @@ final class Legacy_Adoption {
 	}
 
 	/**
+	 * Whether Pro captured an adopted checkout of this order: its row is `captured`, so Pro settled
+	 * the money and the old attempt is finished too.
+	 *
+	 * @param \WC_Order $order       Order.
+	 * @param string    $checkout_id Square checkout id.
+	 */
+	public static function captured_by_pro( $order, string $checkout_id ): bool {
+		if ( '' === $checkout_id || ! function_exists( 'wcpos_pro_payment_id_for_action' ) || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return false;
+		}
+		$adopted    = (string) $order->get_meta( self::META_ADOPTED, true );
+		$ref        = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+		$payment_id = wcpos_pro_payment_id_for_action( Square_Server_Provider::PROVIDER, $ref );
+		if ( null === $payment_id ) {
+			return false;
+		}
+		$row = \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->find( $order, (string) $payment_id );
+
+		return 'captured' === ( $row['status'] ?? '' );
+	}
+
+	/**
 	 * Whether Pro's ledger holds a live row (pending, authorized or captured) for this gateway on
 	 * the order: a leg Pro is driving now, adopted or its own. While one exists the old panel must
 	 * not start a checkout beside it, whichever collection method the settings name today.

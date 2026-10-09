@@ -163,6 +163,33 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertFalse( $this->order->paid );
 	}
 
+	public function test_a_verified_return_for_an_order_paid_meanwhile_is_noted_and_an_unverified_one_is_not(): void {
+		// Unpaid when the request arrives, paid (by WCPOS Pro, say) by the time the lock is taken.
+		$order = $this->order;
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $order ) {
+			if ( '' !== (string) get_option( 'sqtwc_lock_99', '' ) ) {
+				$order->paid = true;
+			}
+			return $order;
+		};
+		try {
+			$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'txn_late', 'state' => $this->state() ) ) ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'] );
+		}
+		self::assertSame( '/thank-you', $url );
+		self::assertSame( 1, $this->verifier->calls, 'Verified first' );
+		self::assertStringContainsString( 'transaction txn_late for an order that was already paid', implode( "\n", $order->notes ) );
+		self::assertSame( 0, $order->payment_complete_calls );
+		// Already paid before any verification: the order key alone writes nothing.
+		$other = new \SQTWC_Test_Order( 99 );
+		$other->key = 'order-key';
+		$other->paid = true;
+		$GLOBALS['sqtwc_orders'][99] = $other;
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );
+		self::assertSame( array(), $other->notes );
+	}
+
 	public function test_already_paid_order_redirects_to_receipt_without_recompletion(): void {
 		$this->order->paid = true;
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'attacker-value', 'state' => $this->state() ) ) ) );

@@ -105,8 +105,7 @@ final class PosCallbackHandler {
 		}
 
 		if ( $order->is_paid() ) {
-			self::note_return_on_paid_order( $order, $callback['transaction_id'] );
-			$this->redirect_to_receipt( $order );
+			$this->redirect_to_receipt( $order ); // Unverified so far: nothing is written on the strength of it.
 		}
 
 		try {
@@ -224,8 +223,9 @@ final class PosCallbackHandler {
 	}
 
 	/**
-	 * A Square Point of Sale transaction came back for an order that is already paid (by WCPOS
-	 * Pro's panel, or another path): the money may have been taken twice, and the order says so.
+	 * A verified Square Point of Sale transaction came back for an order that was paid meanwhile (by
+	 * WCPOS Pro's panel, or another path): the money may have been taken twice, and the order says
+	 * so. Only after verification: the order key alone must not let anyone write a note.
 	 *
 	 * @param object $order          WooCommerce order.
 	 * @param string $transaction_id Square transaction id.

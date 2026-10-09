@@ -954,6 +954,10 @@ class Gateway extends \WC_Payment_Gateway {
 		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
 			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
 		}
+		if ( $order && Legacy_Adoption::pro_has_live_row( $order ) ) {
+			// The collection method changed under a live WCPOS Pro payment: no second charge from the app.
+			return __( 'WooCommerce POS is taking a payment on this order. Finish or cancel it there before using the Square POS app.', 'square-terminal-for-woocommerce' );
+		}
 
 		return '';
 	}

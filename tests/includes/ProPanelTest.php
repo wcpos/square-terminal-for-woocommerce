@@ -208,8 +208,12 @@ final class ProPanelTest extends TestCase {
 		self::assertFalse( $result['applied'] );
 		self::assertSame( 'pro_owned', $result['reason'] );
 		self::assertFalse( $order->paid, 'The old webhook, sweep and status check never complete a payment Pro settles' );
-		// Pro captured and completed the order: the old attempt is closed so the sweep's index clears.
+		// Paid another way while Pro's row is still pending: the pointer stays, so the cleanup can cancel.
 		$order->paid = true;
+		$result = $reconciler->reconcile( $completed, $order );
+		self::assertSame( 'pro_owned', $result['reason'] );
+		self::assertSame( 'att-1', $order->meta['_sqtwc_current_attempt_id'] );
+		// Pro captured it: the old attempt is closed so the sweep's index clears.
 		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'row-1', 'status' => 'captured' ) );
 		$result = $reconciler->reconcile( $completed, $order );
 		self::assertSame( 'pro_owned', $result['reason'] );
@@ -225,6 +229,18 @@ final class ProPanelTest extends TestCase {
 		$result = $reconciler->reconcile( $completed, $order );
 		self::assertTrue( $result['applied'] );
 		self::assertTrue( $order->paid );
+	}
+
+	public function test_the_pos_app_hand_off_is_blocked_while_pro_has_a_live_row(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'collection_method' => 'pos_app', 'environment' => 'production', 'pos_application_id' => 'sq0idp-AbCdEf1234567890_-xyZA', 'location_id' => 'LOC' );
+		Settings::reset_cache_for_tests();
+		$this->order();
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => 'r1', 'method_id' => 'sqtwc', 'status' => 'pending', 'capture_mode' => 'server' ) );
+		$html = Gateway::render_payment_ui( 99 );
+		self::assertStringContainsString( 'data-sqtwc-action="pos-open" disabled', $html );
+		self::assertStringContainsString( 'WooCommerce POS is taking a payment on this order', $html );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array();
+		self::assertStringNotContainsString( 'disabled', Gateway::render_payment_ui( 99 ) );
 	}
 
 	public function test_old_cashier_assets_are_not_loaded_under_pros_panel(): void {
