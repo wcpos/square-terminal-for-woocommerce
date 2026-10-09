@@ -2,7 +2,7 @@
 
 Collect WooCommerce order payments on [Square Terminal](https://squareup.com/hardware/terminal) devices. Staff request a card-present payment from a WooCommerce order and complete it on paired Square hardware, with the result written back to the order.
 
-This is an early **v0.1** release focused on POS / order-pay flows, verified Square webhooks, scoped Square SDK dependencies, and secure order-access checks.
+**Requires WooCommerce POS Pro 2.0 or newer.** The gateway is for staff on the POS: it never appears on the shop's checkout. Without a compatible Pro the plugin shows an admin notice and registers nothing.
 
 ## Features
 
@@ -22,6 +22,7 @@ This is an early **v0.1** release focused on POS / order-pay flows, verified Squ
 |---|---|
 | WordPress | 6.5 |
 | WooCommerce | 8.0 |
+| WooCommerce POS Pro | 2.0.0 |
 | PHP | 8.1 |
 
 ## Installation
@@ -32,12 +33,12 @@ This is an early **v0.1** release focused on POS / order-pay flows, verified Squ
 
 ## Configuration
 
-1. Go to **WooCommerce → Settings → Payments** and enable **Square Terminal**.
+1. Go to **WooCommerce → Settings → Payments → Square Terminal**.
 2. Enter your Square **Access Token**, **Location ID**, and **Webhook Signature Key** (Sandbox or Production).
 3. Use **Create Device Code** to pair a Terminal: enter the generated code on the Square Terminal to register the device.
 4. Configure the webhook notification URL shown on the settings screen in your Square Developer dashboard so payment-completion events reach the site.
 
-Square Terminal is intended primarily for **POS Checkout**; availability on the customer-facing **Storefront Checkout** is off by default and must be explicitly enabled.
+Switch the gateway on in **POS → Settings → Checkout**. That is the only switch: the gateway is available on POS requests and, to users who may run the POS, on the order-pay page; it is never offered on the shop's checkout.
 
 ## Development
 

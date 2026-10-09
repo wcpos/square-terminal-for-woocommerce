@@ -186,20 +186,10 @@ final class SquareConnectUiTest extends TestCase {
 		self::assertStringContainsString( 'could not be renewed', $html );
 	}
 
-	public function test_enable_setting_says_it_governs_web_checkout_only(): void {
-		$fields = $this->gateway()->form_fields['enabled'];
-
-		// The POS uses the gateway once configured regardless of this setting, so
-		// a bare "Enable" read as though the POS needed it too. Matches the
-		// wording already used by the Stripe and SumUp Terminal plugins.
-		self::assertSame( 'Enable/Disable', $fields['title'] );
-		self::assertStringContainsString( 'web checkout', $fields['label'] );
-		self::assertStringContainsString( 'not necessary for', $fields['label'] );
-		self::assertStringContainsString( 'wcpos.com', $fields['label'] );
-		self::assertStringContainsString( 'WCPOS uses this gateway automatically', $fields['description'] );
-		// Branded WCPOS, not "WooCommerce POS".
-		self::assertStringContainsString( '>WCPOS<', $fields['label'] );
-		self::assertStringNotContainsString( 'WooCommerce POS', $fields['label'] );
+	public function test_there_is_no_enable_checkbox_because_the_gateway_is_pos_only(): void {
+		// The POS switch (POS → Settings → Checkout) is the only switch; the checkbox that governed
+		// the shop's checkout is gone with that checkout.
+		self::assertArrayNotHasKey( 'enabled', $this->gateway()->form_fields );
 	}
 
 	public function test_connecting_honours_the_environment_chosen_on_screen(): void {

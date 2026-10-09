@@ -167,7 +167,7 @@ class Gateway extends \WC_Payment_Gateway {
 	/**
 	 * Register and enqueue the cashier payment assets with localized data.
 	 *
-	 * Enqueued on the order-pay page and checkout, and anywhere a POS context
+	 * Enqueued on the order-pay page, and anywhere a POS context
 	 * opts in via the `sqtwc_enqueue_payment_assets` filter. The localized data
 	 * carries every dynamic string, the AJAX contract, and the device list so
 	 * the JavaScript stays dependency-free and fully translatable.
@@ -201,10 +201,10 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Decide whether the current request should load the cashier assets.
 	 */
 	private function should_enqueue_payment_assets(): bool {
-		// Both branches are load-bearing: 0.2.2 restored the cashier controls on
-		// WCPOS checkouts, which are not always is_checkout_pay_page().
+		// The order-pay page, and the POS's own checkout route (a POS request that WooCommerce
+		// counts as checkout, not always is_checkout_pay_page()); never the shop's checkout.
 		$should = ( function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() )
-			|| ( function_exists( 'is_checkout' ) && is_checkout() );
+			|| ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() && function_exists( 'is_checkout' ) && is_checkout() );
 
 		/**
 		 * Filter whether the Square Terminal cashier assets should load.
@@ -530,22 +530,9 @@ class Gateway extends \WC_Payment_Gateway {
 		// credentials sit in Advanced because connecting removes the need for
 		// them — asking for an access token above the button that makes it
 		// unnecessary is what made the previous layout confusing.
+		// No "enabled" checkbox: the gateway is POS-only (see is_available()), and the switch for
+		// that is in POS → Settings → Checkout. The web checkout the checkbox governed is gone.
 		$this->form_fields = array(
-			'enabled'                  => array(
-				'title'       => __( 'Enable/Disable', 'square-terminal-for-woocommerce' ),
-				'type'        => 'checkbox',
-				// This setting governs the online store only. WooCommerce POS uses
-				// the gateway once it is configured, whether or not it is enabled
-				// here, and a bare "Enable" implied the POS needed it too.
-				'label'       => sprintf(
-					/* translators: %s: link to WCPOS. */
-					__( 'Enable Square Terminal for web checkout (not necessary for %s)', 'square-terminal-for-woocommerce' ),
-					'<a href="https://wcpos.com" target="_blank">WCPOS</a>'
-				),
-				'description' => __( 'WCPOS uses this gateway automatically once configured.', 'square-terminal-for-woocommerce' ),
-				'default'     => 'no',
-			),
-
 			'section_account'          => array(
 				'title'       => __( 'Square account', 'square-terminal-for-woocommerce' ),
 				'type'        => 'title',
@@ -651,6 +638,27 @@ class Gateway extends \WC_Payment_Gateway {
 				'type'  => 'advanced_end',
 			),
 		);
+	}
+
+	/**
+	 * The gateway is POS-only: a Square Terminal is driven by staff, never by a shopper.
+	 *
+	 * Available on a POS request, and on the order-pay page to a user who may run the POS when the
+	 * POS has the gateway switched on; never on the shop's checkout. The WooCommerce → Payments
+	 * checkbox that governed the shop's checkout is gone, and a value a site saved for it before
+	 * the upgrade counts for nothing.
+	 *
+	 * @return bool
+	 */
+	public function is_available() {
+		if ( '' === Settings::get_access_token() || '' === Settings::get_location_id() ) {
+			return false;
+		}
+		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
+			return true;
+		}
+
+		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' ) && Settings::enabled_for_pos();
 	}
 
 	/**

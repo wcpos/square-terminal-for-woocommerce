@@ -11,6 +11,8 @@ All notable changes to this project are documented in this file. Release notes f
 
 ### Changed
 
+- **WooCommerce POS Pro 2.0 is required.** Without a compatible Pro the plugin shows an admin notice and registers nothing (no gateway, AJAX, webhook route or sweeper). Activation records the requirement for Pro's own notice.
+- **The gateway is POS-only.** It is available on POS requests and, to users who may run the POS, on the order-pay page when POS → Settings → Checkout has it switched on; it is never offered on the shop's checkout. The "Enable Square Terminal for web checkout" checkbox is gone, and a value saved for it before the upgrade counts for nothing. The cashier assets load on the order-pay page and the POS's checkout route only.
 - The Square SDK client can be replaced through the `sqtwc_square_http_client` filter (tests script Square through it), and `SquareClientFactory::create()` accepts further SDK options.
 - `SquareTerminalAdapter` normalizes the card details, receipt number and reference of a payment, and the device of a checkout, and gains `refund_payment()`.
 

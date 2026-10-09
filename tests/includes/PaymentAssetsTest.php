@@ -50,16 +50,19 @@ final class PaymentAssetsTest extends TestCase {
 		Settings::reset_cache_for_tests();
 	}
 
-	public function test_checkout_enqueues_payment_assets(): void {
+	public function test_pos_checkout_enqueues_payment_assets_but_the_shop_checkout_does_not(): void {
+		// The shop's checkout no longer offers the gateway (Pro-only at 2.0).
 		$GLOBALS['sqtwc_is_checkout'] = true;
-
 		( new Gateway() )->enqueue_payment_assets();
+		self::assertNotContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] ?? array() );
 
 		// Regression guard: 0.2.2 restored the cashier controls on WCPOS
-		// checkouts, which are not always is_checkout_pay_page(). Narrowing this
-		// gate to the pay page alone stops the assets loading in the POS.
+		// checkouts, which are not always is_checkout_pay_page().
+		$GLOBALS['sqtwc_pos_request'] = true;
+		( new Gateway() )->enqueue_payment_assets();
 		self::assertContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_scripts'] );
 		self::assertContains( 'sqtwc-payment', $GLOBALS['sqtwc_enqueued_styles'] );
+		unset( $GLOBALS['sqtwc_pos_request'] );
 	}
 
 	public function test_order_pay_page_enqueues_payment_assets(): void {

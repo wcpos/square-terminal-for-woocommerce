@@ -107,6 +107,20 @@ final class Settings {
 	}
 
 	/**
+	 * Whether the POS has the gateway switched on (POS → Settings → Checkout): the only switch.
+	 */
+	public static function enabled_for_pos(): bool {
+		// wcpos_get_settings() is the maintained helper; woocommerce_pos_get_settings() is its deprecated alias.
+		$getter = function_exists( 'wcpos_get_settings' ) ? 'wcpos_get_settings' : 'woocommerce_pos_get_settings';
+		if ( ! function_exists( $getter ) ) {
+			return false;
+		}
+		$settings = $getter( 'payment_gateways' );
+
+		return is_array( $settings ) && ! empty( $settings['gateways'][ Gateway::ID ]['enabled'] );
+	}
+
+	/**
 	 * Return Square Location ID.
 	 */
 	public static function get_location_id(): string {
