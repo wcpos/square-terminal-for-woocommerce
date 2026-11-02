@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.\-]*' square-terminal-for-woocommerce.php | head -n1)
+          VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K\S+' square-terminal-for-woocommerce.php | head -n1)
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta[0-9]+)?$ ]]; then
             echo "::error::Version header '$VERSION' is neither X.Y.Z nor X.Y.Z-betaN"
             exit 1
