@@ -6,8 +6,11 @@ name: Release
 # square-terminal-for-woocommerce.zip so the WCPOS extensions catalog can pick
 # it up automatically.
 #
-# It can also be run manually from the Actions tab (workflow_dispatch), e.g. to
-# re-cut a release after a failed run. Tick "force" to replace an existing
+# A beta is cut by dispatching this workflow on `next` with an X.Y.Z-betaN
+# header: it is published as a GitHub prerelease, which `releases/latest` never
+# returns, so the extension catalog and every merchant's updater never see it.
+# Beta testers install the zip by hand. A push never cuts a beta and a dispatch
+# never cuts a stable. Tick "force" on a beta dispatch to replace an existing
 # release for the current header version.
 
 on:
@@ -45,11 +48,25 @@ jobs:
           set -euo pipefail
 
           VERSION=$(grep -ioP '^\s*\*\s*Version:\s*\K[0-9][0-9A-Za-z.\-]*' square-terminal-for-woocommerce.php | head -n1)
-          if [ -z "$VERSION" ]; then
-            echo "Could not determine plugin version from header" >&2
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta[0-9]+)?$ ]]; then
+            echo "::error::Version header '$VERSION' is neither X.Y.Z nor X.Y.Z-betaN"
             exit 1
           fi
+          if [[ "$VERSION" == *-beta* ]]; then
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$GITHUB_REF" != "refs/heads/next" ]; then
+              echo "::error::$VERSION is a beta; a beta is cut only by dispatching this workflow on next, never by a push to main or from another ref"
+              exit 1
+            fi
+            PRERELEASE=true
+          else
+            if [ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]; then
+              echo "::error::$VERSION is a stable version; a stable release is cut only by a push to main"
+              exit 1
+            fi
+            PRERELEASE=false
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "Plugin version: $VERSION"
 
       - name: Check whether release is needed
@@ -63,9 +80,10 @@ jobs:
           TAG="v$VERSION"
           ASSET="square-terminal-for-woocommerce.zip"
 
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          git fetch --prune --tags
+          if ! git tag | grep -qx "$TAG"; then
             MODE=create
-            echo "Release $TAG does not exist; creating it."
+            echo "Tag $TAG does not exist; creating the release."
           elif [ "${{ inputs.force }}" = "true" ]; then
             MODE=replace
             echo "Release $TAG exists; force re-release requested."
@@ -126,6 +144,13 @@ jobs:
             echo "Distributable zip was not created or is empty" >&2
             exit 1
           fi
+          # WordPress 7.1.4+ unpacks packages into a randomly suffixed folder and installs a flat zip
+          # there, so the zip must hold the installed folder (catalog slug) as its only top-level entry.
+          TOP_LEVEL=$(unzip -Z1 "$PLUGIN.zip" | cut -d/ -f1 | sort -u)
+          if [ "$TOP_LEVEL" != "$PLUGIN" ]; then
+            echo "::error::$PLUGIN.zip must contain only $PLUGIN/ at the top level, found: $TOP_LEVEL"
+            exit 1
+          fi
           echo "Packaged $(du -h "$PLUGIN.zip" | cut -f1) archive"
 
       - name: Publish GitHub Release
@@ -145,6 +170,10 @@ jobs:
             CREATE_NOTES_ARGS=(--notes-file "$NOTES_FILE")
             EDIT_NOTES_ARGS=(--notes-file "$NOTES_FILE")
           fi
+          PRERELEASE_ARGS=()
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            PRERELEASE_ARGS=(--prerelease)
+          fi
 
           case "${{ steps.check.outputs.mode }}" in
             replace)
@@ -152,7 +181,8 @@ jobs:
               gh release create "$TAG" "$ZIP" \
                 --target "$GITHUB_SHA" \
                 --title "$TAG" \
-                "${CREATE_NOTES_ARGS[@]}"
+                "${CREATE_NOTES_ARGS[@]}" \
+                "${PRERELEASE_ARGS[@]}"
               ;;
             repair)
               gh release upload "$TAG" "$ZIP" --clobber
@@ -164,7 +194,8 @@ jobs:
               gh release create "$TAG" "$ZIP" \
                 --target "$GITHUB_SHA" \
                 --title "$TAG" \
-                "${CREATE_NOTES_ARGS[@]}"
+                "${CREATE_NOTES_ARGS[@]}" \
+                "${PRERELEASE_ARGS[@]}"
               ;;
             *)
               echo "Unexpected release mode: ${{ steps.check.outputs.mode }}" >&2
