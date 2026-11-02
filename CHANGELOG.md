@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file. Release notes f
 
 ## [Unreleased]
 
+## [1.0.0-beta1] - 2026-11-02
+
+First beta of 1.0.0, for the WCPOS 2.0 beta. The extension now runs on WCPOS Pro 2.0's shared payments base and requires WCPOS Pro 2.0.0 or later.
+
 ### Added
 
 - **A server adapter for the WCPOS Pro 2.0 payments base.** With Pro 2.0 active, the plugin registers `Square_Server_Provider`, so the POS app drives a paired Square Terminal through Pro's ledger: a checkout per ledger row (the row id is Square's idempotency key), polling, cancellation, signed `terminal.checkout.updated` webhooks on Pro's route, and refunds through Square's Refunds API. Pro's provider conformance suite runs against the real adapter over a scripted Square in CI, with the transcripts committed. Without a compatible Pro the plugin behaves as before.
