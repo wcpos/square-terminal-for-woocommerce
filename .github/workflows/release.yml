@@ -80,10 +80,11 @@ jobs:
           TAG="v$VERSION"
           ASSET="square-terminal-for-woocommerce.zip"
 
-          git fetch --prune --tags
-          if ! git tag | grep -qx "$TAG"; then
+          # The release, not the tag, decides: a tag left behind by a deleted release must not
+          # block publishing, and `gh release create` accepts an existing tag.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
             MODE=create
-            echo "Tag $TAG does not exist; creating the release."
+            echo "Release $TAG does not exist; creating it."
           elif [ "${{ inputs.force }}" = "true" ]; then
             MODE=replace
             echo "Release $TAG exists; force re-release requested."
