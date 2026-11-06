@@ -1173,7 +1173,7 @@ class Gateway extends \WC_Payment_Gateway {
 			. '<p class="description">%7$s</p>',
 			esc_attr( $state ),
 			esc_html( $message ),
-			esc_attr( Settings::get_webhook_notification_url() ),
+			esc_attr( Settings::get_displayed_webhook_url() ),
 			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
 			esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),

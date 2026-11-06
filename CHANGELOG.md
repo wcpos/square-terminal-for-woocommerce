@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file. Release notes f
 
 ## [Unreleased]
 
+### Fixed
+
+- Under WCPOS Pro's panel, the settings screen showed the old webhook URL, and "Verified" counted deliveries Pro never sees. It now shows Pro's URL and counts only deliveries signed for it. After upgrading, change your Square webhook subscription to the URL the settings screen shows, and save that subscription's signature key here.
+- Checkouts started from WCPOS Pro's panel ignored "Skip receipt screen" and "Collect signature". They now follow both settings.
+- A refund Square answered as pending was never checked again, so a later rejection went unnoticed. WCPOS Pro's refund sweep now reads it until Square completes or rejects it, and the order note no longer calls it confirmed.
+
 ## [1.0.0-beta1] - 2026-11-02
 
 First beta of 1.0.0, for the WCPOS 2.0 beta. The extension now runs on WCPOS Pro 2.0's shared payments base and requires WCPOS Pro 2.0.0 or later.

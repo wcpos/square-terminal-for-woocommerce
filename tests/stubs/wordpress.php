@@ -62,7 +62,7 @@ if ( ! function_exists( 'wp_register_script' ) ) { function wp_register_script( 
 if ( ! function_exists( 'wp_enqueue_script' ) ) { function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $args = array() ) { $GLOBALS['sqtwc_enqueued_scripts'][] = $handle; return true; } }
 if ( ! function_exists( 'wp_localize_script' ) ) { function wp_localize_script( $handle, $object_name, $l10n ) { $GLOBALS['sqtwc_localized_scripts'][$handle] = array( 'object' => $object_name, 'data' => $l10n ); return true; } }
 if ( ! function_exists( 'wp_register_style' ) ) { function wp_register_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_registered_styles'][$handle] = $src; return true; } }
-if ( ! function_exists( 'add_query_arg' ) ) { function add_query_arg( $args, $url = '' ) { $sep = str_contains( (string) $url, '?' ) ? '&' : '?'; return $url . $sep . http_build_query( (array) $args ); } }
+if ( ! function_exists( 'add_query_arg' ) ) { function add_query_arg( $args, $url = '', $third = null ) { if ( ! is_array( $args ) ) { $args = array( $args => $url ); $url = (string) $third; } $sep = str_contains( (string) $url, '?' ) ? '&' : '?'; return $url . $sep . http_build_query( (array) $args ); } }
 // Redirect stubs throw so the exit() that follows them in production code is
 // never reached under PHPUnit, which would otherwise kill the test run.
 class SQTWC_Redirect extends \RuntimeException {}

@@ -15,6 +15,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareTerminalAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Exceptions\SquareApiException;
+use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
 use WCPOS\WooCommercePOSPro\Payments\Server\Abstract_Provider_Adapter;
 use WCPOS\WooCommercePOSPro\Payments\Server\Money_Units;
 
@@ -46,6 +47,9 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 
 	/** Square's signature header. */
 	public const SIGNATURE_HEADER = 'x-square-hmacsha256-signature';
+
+	/** Order meta: the device options each row's first create sent, keyed by row id. */
+	public const DEVICE_OPTIONS_META = '_sqtwc_device_options';
 
 	/**
 	 * Client factory.
@@ -119,9 +123,19 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 		if ( ! $order ) {
 			return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'square-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		}
+		// The old panel's settings, saved before the row's first POST: a replay sends the first body.
+		$snapshot = (array) $order->get_meta( self::DEVICE_OPTIONS_META, true );
+		if ( ! is_array( $snapshot[ $row['id'] ] ?? null ) ) {
+			$snapshot[ $row['id'] ] = array(
+				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
+				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
+			);
+			$order->update_meta_data( self::DEVICE_OPTIONS_META, array_filter( $snapshot, 'is_array' ) );
+			$order->save();
+		}
 		try {
 			$checkout = $this->terminal( $environment )->create_checkout(
-				array(
+				$snapshot[ $row['id'] ] + array(
 					'idempotency_key'   => (string) $row['id'],
 					'amount'            => Money_Units::minor( (string) $row['amount'], (string) $row['currency'] ),
 					'currency'          => strtoupper( (string) $row['currency'] ),
@@ -233,15 +247,9 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 			// Saved before the POST: a replay of the record asks under the same key.
 			$key    = Refund_Reask::attempt_key( $refund, $request );
 			$result = $this->refund_once( $request, $key );
-			$map    = array(
-				'COMPLETED' => 'succeeded',
-				'PENDING'   => 'pending',
-				'REJECTED'  => 'failed',
-				'FAILED'    => 'failed',
-			);
 
 			return array(
-				'status'       => $map[ (string) $result['status'] ] ?? 'pending',
+				'status'       => self::refund_status( (string) $result['status'] ),
 				'provider_ref' => ! empty( $result['id'] ) ? (string) $result['id'] : null,
 			);
 		} catch ( SquareApiException $e ) {
@@ -283,6 +291,45 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 		);
 	}
 
+	/** Square's refund status in Pro's vocabulary: only Square's own REJECTED or FAILED is a failure. */
+	public static function refund_status( string $status ): string {
+		$map = array(
+			'COMPLETED' => 'succeeded',
+			'PENDING'   => 'pending',
+			'REJECTED'  => 'failed',
+			'FAILED'    => 'failed',
+		);
+
+		return $map[ $status ] ?? 'pending';
+	}
+
+	/**
+	 * {@inheritDoc} An allocation whose POST went unanswered has no provider_ref; the re-ask writes
+	 * Square's refund id on the refund record once Square answers.
+	 */
+	public function fetch_refund( array $row, array $allocation ) {
+		$record    = wc_get_order( (int) $allocation['id'] );
+		$refund_id = (string) ( $allocation['provider_ref'] ?? '' );
+		if ( '' === $refund_id && $record ) {
+			$refund_id = (string) $record->get_meta( Refund_Reask::META_REFUND, true );
+		}
+		if ( '' === $refund_id ) { // Square has not answered the POST yet: the sweep keeps asking.
+			return $this->indeterminate( 'square_unanswered', __( 'Square has not answered this refund yet.', 'square-terminal-for-woocommerce' ) );
+		}
+		$request     = $record ? (array) $record->get_meta( Refund_Reask::META_REQUEST, true ) : array();
+		$environment = (string) ( $request['environment'] ?? Settings::get_environment() ); // Saved by refund() before its POST.
+		try {
+			$refund = $this->terminal( $environment )->get_refund( $refund_id );
+		} catch ( Throwable $e ) {
+			return self::unanswered( $e, 'fetch_refund' ); // Never `failed`: only Square's own answer says no money moved.
+		}
+
+		return array(
+			'status'       => self::refund_status( (string) $refund['status'] ),
+			'provider_ref' => (string) $refund['id'],
+		);
+	}
+
 	/**
 	 * One refund POST under a given key; Square dedupes a replay of the same request.
 	 *
@@ -305,6 +352,8 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 		if ( '' === $key || '' === $signature || '' === $body || ! self::signed( $body, $signature, $key ) ) {
 			return new \WP_Error( 'square_webhook_signature', __( 'Invalid Square webhook signature.', 'square-terminal-for-woocommerce' ), array( 'status' => 401 ) );
 		}
+		// The settings screen's health row: a delivery Square signed for Pro's route.
+		WebhookHandler::record_verified_delivery( Settings::get_pro_webhook_url() );
 		$event       = json_decode( $body, true );
 		$checkout_id = (string) ( $event['data']['object']['checkout']['id'] ?? '' );
 		if ( 'terminal.checkout.updated' !== ( $event['type'] ?? '' ) || '' === $checkout_id ) {
