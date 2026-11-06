@@ -737,6 +737,8 @@ class Gateway extends \WC_Payment_Gateway {
 					$message = __( 'An earlier Square Terminal payment on this order has not been confirmed yet. It is being checked; reload the page in a few minutes, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
 				} elseif ( 'sqtwc_adoption_unconfirmed_create' === $adopted->get_error_code() ) {
 					$message = __( 'Square never confirmed an earlier Terminal payment on this order, and it may still be open. Check the Terminal and the Square dashboard. A new payment can start here one hour after that attempt began.', 'square-terminal-for-woocommerce' );
+				} elseif ( 'sqtwc_adoption_other_environment' === $adopted->get_error_code() ) {
+					$message = __( 'An earlier Square Terminal payment on this order was started under a different Square account or Environment setting, so it cannot be handed to WooCommerce POS. Check it in the Square dashboard, or switch the setting back, before taking this payment again.', 'square-terminal-for-woocommerce' );
 				} else {
 					$message = __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. Square cancels an unpaid checkout within five minutes and this plugin clears it within about twenty; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
 				}

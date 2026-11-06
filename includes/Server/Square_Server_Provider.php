@@ -210,6 +210,26 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	}
 
 	/**
+	 * A checkout's `reference_id`, read in one environment: '' when Square answers that the
+	 * environment has no such checkout (404), a WP_Error when Square did not answer or refused the
+	 * read, or there is no token to ask with.
+	 *
+	 * @param string $environment Square environment.
+	 * @param string $checkout_id Checkout id.
+	 * @return string|\WP_Error
+	 */
+	public function checkout_reference( string $environment, string $checkout_id ) {
+		if ( '' === Settings::get_access_token_for( $environment ) ) {
+			return new \WP_Error( 'square_no_token', 'No Square access token for ' . $environment . '.' );
+		}
+		try {
+			return (string) ( $this->terminal( $environment )->get_checkout( $checkout_id )['reference_id'] ?? '' );
+		} catch ( Throwable $e ) {
+			return $e instanceof SquareApiException && 404 === $e->getStatusCode() ? '' : new \WP_Error( 'square_checkout_unread', $e->getMessage(), self::detail( $e ) );
+		}
+	}
+
+	/**
 	 * {@inheritDoc}
 	 */
 	public function cancel( string $ref ) {
