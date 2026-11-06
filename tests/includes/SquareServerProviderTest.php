@@ -62,7 +62,7 @@ final class SquareServerProviderTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'], $GLOBALS['sqtwc_orders'], $GLOBALS['sqtwc_adopted'] );
+		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'], $GLOBALS['sqtwc_orders'], $GLOBALS['sqtwc_adopted'], $GLOBALS['sqtwc_ledger_rows'], $GLOBALS['sqtwc_wc_get_order_callback'], $GLOBALS['sqtwc_clean_post_cache_callback'], $GLOBALS['sqtwc_cleaned_post_caches'] );
 		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
 		Settings::reset_cache_for_tests();
 	}
@@ -666,5 +666,116 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertCount( 1, $this->square->requests );
 		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
 		$this->assertSame( '/v2/devices/codes', $this->square->requests[0]->getUri()->getPath() );
+	}
+
+	private const UNCONFIRMED = 'Square never confirmed an earlier Terminal payment for this sale, and it may still be open. Check the Terminal and the Square dashboard. A new payment can start one hour after that attempt began.';
+	private const STALE       = 'An earlier Square Terminal payment for this sale has not been confirmed yet. It is being checked. Try again in a few minutes, or check it in the Square dashboard.';
+	private const OPEN        = 'An earlier Square Terminal payment for this sale is still open on the payment page. Finish or cancel it there first.';
+
+	/** The old panel's create Square never answered, started `$age` seconds ago. */
+	private function unconfirmed_create( int $age ): \SQTWC_Test_Order {
+		$order = $GLOBALS['sqtwc_orders'][99];
+		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
+		$order->meta['_sqtwc_checkout_status']    = 'PENDING';
+		$order->meta['_sqtwc_attempt_started']    = time() - $age;
+		return $order;
+	}
+
+	/** The old panel's live checkout TC9, started `$age` seconds ago. */
+	private function legacy_checkout( int $age ): \SQTWC_Test_Order {
+		$order = $GLOBALS['sqtwc_orders'][99];
+		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
+		$order->meta['_sqtwc_checkout_id']        = 'TC9';
+		$order->meta['_sqtwc_checkout_status']    = 'IN_PROGRESS';
+		$order->meta['_sqtwc_attempt_started']    = time() - $age;
+		return $order;
+	}
+
+	private function assert_refused( string $message ): void {
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'sqtwc_legacy_attempt_held', $result->get_error_code() );
+		$this->assertSame( 409, $result->get_error_data()['status'] );
+		$this->assertSame( $message, $result->get_error_message() );
+		$this->assertCount( 0, $this->square->requests, 'Nothing reaches Square' );
+		$this->assertSame( '', $GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META ), 'No snapshot is saved' );
+	}
+
+	private function assert_created(): void {
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertIsArray( $result );
+		$this->assertSame( 'sandbox:TC1', $result['ref'] );
+		$this->assertCount( 1, $this->square->requests );
+	}
+
+	public function test_a_tile_start_beside_an_unconfirmed_create_inside_the_window_is_refused(): void {
+		$this->unconfirmed_create( 60 );
+		$this->assert_refused( self::UNCONFIRMED );
+	}
+
+	public function test_the_row_being_started_does_not_lift_the_unconfirmed_hold(): void {
+		// At a tile start the row being created is itself a live ledger row for this gateway.
+		$this->unconfirmed_create( 60 );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => self::ROW, 'method_id' => Gateway::ID, 'status' => 'pending' ) );
+		$this->assert_refused( self::UNCONFIRMED );
+	}
+
+	public function test_a_tile_start_beside_a_stale_live_pointer_is_refused(): void {
+		$this->legacy_checkout( HOUR_IN_SECONDS + 60 );
+		$this->assert_refused( self::STALE );
+	}
+
+	public function test_a_tile_start_beside_a_live_checkout_nothing_adopted_is_refused(): void {
+		$this->legacy_checkout( 60 );
+		$this->assert_refused( self::OPEN );
+	}
+
+	public function test_a_tile_start_after_the_unconfirmed_window_goes_out(): void {
+		$this->unconfirmed_create( HOUR_IN_SECONDS + 60 );
+		$this->assert_created();
+	}
+
+	public function test_a_tile_start_beside_an_adopted_checkout_goes_out_whatever_its_row_status(): void {
+		foreach ( array( 'pending', 'voided' ) as $status ) {
+			$this->setUp();
+			$this->legacy_checkout( 60 );
+			$GLOBALS['sqtwc_adopted']['sandbox:TC9'] = 'row-old';
+			$GLOBALS['sqtwc_ledger_rows'][99]       = array( array( 'id' => 'row-old', 'method_id' => Gateway::ID, 'status' => $status ) );
+			$this->assert_created();
+		}
+	}
+
+	public function test_a_tile_start_beside_a_stale_pointer_whose_pro_row_is_live_goes_out(): void {
+		$this->legacy_checkout( HOUR_IN_SECONDS + 60 );
+		$GLOBALS['sqtwc_adopted']['sandbox:TC9'] = 'row-old';
+		$GLOBALS['sqtwc_ledger_rows'][99]       = array( array( 'id' => 'row-old', 'method_id' => Gateway::ID, 'status' => 'pending' ) );
+		$this->assert_created();
+	}
+
+	public function test_a_tile_start_on_a_paid_order_carrying_an_unconfirmed_create_goes_out(): void {
+		$this->unconfirmed_create( 60 )->paid = true;
+		$this->assert_created();
+	}
+
+	public function test_a_replay_of_a_row_with_a_snapshot_goes_out_beside_a_hold(): void {
+		// Its first POST may have reached Square: the keyed replay must find that checkout.
+		$this->unconfirmed_create( 60 )->update_meta_data( Square_Server_Provider::DEVICE_OPTIONS_META, array( self::ROW => array( 'skip_receipt_screen' => false, 'collect_signature' => false, 'environment' => 'sandbox' ) ) );
+		$this->assert_created();
+	}
+
+	public function test_the_hold_is_judged_on_a_fresh_copy_of_the_order(): void {
+		// A stale copy still shows the unconfirmed create; the copy read past the caches has it closed.
+		$stale = $this->unconfirmed_create( 60 );
+		$fresh = clone $stale;
+		$fresh->meta['_sqtwc_checkout_status'] = 'CANCELED';
+		$GLOBALS['sqtwc_cleaned_post_caches']      = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( int $id ): void {
+			$GLOBALS['sqtwc_cleaned_post_caches'][] = $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $stale, $fresh ) {
+			return in_array( 99, $GLOBALS['sqtwc_cleaned_post_caches'], true ) ? $fresh : $stale;
+		};
+		$this->assert_created();
 	}
 }

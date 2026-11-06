@@ -9,7 +9,9 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Server;
 
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use WCPOS\WooCommercePOS\SquareTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
@@ -126,13 +128,19 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	 * {@inheritDoc}
 	 */
 	public function create_reader_action( array $row, string $reader_id ) {
-		$order = wc_get_order( (int) $row['order_id'] );
+		$order = OrderMeta::reload_order( (int) $row['order_id'] );
 		if ( ! $order ) {
 			return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'square-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		}
 		// The old panel's settings, saved before the row's first POST: a replay sends the first body.
 		$snapshot = (array) $order->get_meta( self::DEVICE_OPTIONS_META, true );
 		if ( ! is_array( $snapshot[ $row['id'] ] ?? null ) ) {
+			// Only a row's first POST is judged: a replay has a snapshot, its first POST may have reached
+			// Square, and it must go on so the idempotency key finds that checkout.
+			$message = Legacy_Adoption::tile_hold_message( $order );
+			if ( '' !== $message ) {
+				return new \WP_Error( 'sqtwc_legacy_attempt_held', $message, array( 'status' => 409 ) );
+			}
 			$snapshot[ $row['id'] ] = array(
 				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
 				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),

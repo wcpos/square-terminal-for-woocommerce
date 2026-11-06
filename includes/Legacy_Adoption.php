@@ -135,6 +135,29 @@ final class Legacy_Adoption {
 	}
 
 	/**
+	 * Why a POS tile start must not put a checkout beside the old panel's attempt, '' when it may.
+	 * Not is_unconfirmed_hold(): the row being started is a live Pro row, which lifts that hold.
+	 *
+	 * @param \WC_Order $order Order, read fresh.
+	 */
+	public static function tile_hold_message( $order ): string {
+		if ( $order->is_paid() ) {
+			return '';
+		}
+		if ( self::unconfirmed_within_window( $order ) ) {
+			return __( 'Square never confirmed an earlier Terminal payment for this sale, and it may still be open. Check the Terminal and the Square dashboard. A new payment can start one hour after that attempt began.', 'square-terminal-for-woocommerce' );
+		}
+		$ref = self::action_ref( $order );
+		if ( self::is_held( $order, $ref ) ) {
+			return __( 'An earlier Square Terminal payment for this sale has not been confirmed yet. It is being checked. Try again in a few minutes, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+		}
+		if ( '' !== $ref && ! self::is_adopted( $ref ) ) {
+			return __( 'An earlier Square Terminal payment for this sale is still open on the payment page. Finish or cancel it there first.', 'square-terminal-for-woocommerce' );
+		}
+		return '';
+	}
+
+	/**
 	 * Whether an unconfirmed create past the window still needs its one release note.
 	 *
 	 * @param \WC_Order $order Order.
