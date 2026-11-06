@@ -38,6 +38,9 @@ final class Legacy_Adoption {
 	/** The action reference Pro adopted, kept on the order for good. */
 	public const META_ADOPTED = '_sqtwc_adopted_ref';
 
+	/** The attempt id whose release note was written: one note per unconfirmed attempt. */
+	public const META_UNCONFIRMED_NOTED = '_sqtwc_unconfirmed_noted';
+
 	private const QUEUE_OPTION   = 'sqtwc_adoption_queue';
 	private const VERSION_OPTION = 'sqtwc_adoption_version';
 
@@ -57,8 +60,9 @@ final class Legacy_Adoption {
 	/**
 	 * The action reference Pro's provider uses for the attempt the old panel started: the
 	 * order's current checkout while it is still live, in the current environment. '' for a
-	 * final checkout or none (an attempt whose create Square never confirmed has no checkout id
-	 * and cannot be adopted; the old sweep keeps the order indexed, as before).
+	 * final checkout or none. An attempt whose create Square never confirmed has no checkout id
+	 * and cannot be adopted; the old sweep keeps the order indexed but cannot resolve it, so Pro's
+	 * panel is held for the adoption window from that attempt (has_unconfirmed_create()).
 	 *
 	 * @param \WC_Order $order Order.
 	 */
@@ -97,6 +101,46 @@ final class Legacy_Adoption {
 	 */
 	private static function is_held( $order, string $ref ): bool {
 		return '' === $ref && ! $order->is_paid() && self::has_stale_live_pointer( $order ) && ! self::pro_row_live( $order, (string) $order->get_meta( '_sqtwc_checkout_id', true ) );
+	}
+
+	/**
+	 * Whether the old panel started an attempt whose create Square never confirmed: an attempt id,
+	 * no checkout id, and a status the old panel still polls. Square may have made that checkout.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	public static function has_unconfirmed_create( $order ): bool {
+		return '' !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true ) && '' === (string) $order->get_meta( '_sqtwc_checkout_id', true ) && in_array( (string) $order->get_meta( '_sqtwc_checkout_status', true ), self::LIVE_CHECKOUT_STATUSES, true );
+	}
+
+	/**
+	 * Whether an unconfirmed create is still inside the adoption window. An attempt with no start
+	 * time counts as past it: a hold with no end would strand the order.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	private static function unconfirmed_within_window( $order ): bool {
+		$started = (int) $order->get_meta( '_sqtwc_attempt_started', true );
+		return self::has_unconfirmed_create( $order ) && $started > 0 && $started >= time() - self::ADOPTION_WINDOW;
+	}
+
+	/**
+	 * Whether Pro's panel is held beside an unconfirmed create: unpaid, inside the window, and no
+	 * live Pro leg (one keeps its panel and controls).
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	private static function is_unconfirmed_hold( $order ): bool {
+		return ! $order->is_paid() && self::unconfirmed_within_window( $order ) && ! self::pro_has_live_row( $order );
+	}
+
+	/**
+	 * Whether an unconfirmed create past the window still needs its one release note.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	private static function needs_unconfirmed_note( $order ): bool {
+		return ! $order->is_paid() && self::has_unconfirmed_create( $order ) && ! self::unconfirmed_within_window( $order ) && (string) $order->get_meta( self::META_UNCONFIRMED_NOTED, true ) !== (string) $order->get_meta( '_sqtwc_current_attempt_id', true );
 	}
 
 	/**
@@ -321,7 +365,7 @@ final class Legacy_Adoption {
 		$ref = self::action_ref( $order );
 		// An old pointer with an unknown outcome is decided under the locks too (a parallel request may
 		// have adopted it meanwhile); everything else that is nothing to adopt answers here.
-		if ( ! self::is_held( $order, $ref ) && ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) ) {
+		if ( ! self::is_held( $order, $ref ) && ! self::is_unconfirmed_hold( $order ) && ! self::needs_unconfirmed_note( $order ) && ( '' === $ref || self::is_adopted( $ref ) || $order->is_paid() || ! $order->needs_payment() ) ) {
 			return null;
 		}
 		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Order_Lock' ) ) {
@@ -344,6 +388,14 @@ final class Legacy_Adoption {
 					$fresh = OrderMeta::reload_order( $order_id );
 					if ( ! $fresh ) {
 						return null;
+					}
+					if ( self::is_unconfirmed_hold( $fresh ) ) {
+						return new \WP_Error( 'sqtwc_adoption_unconfirmed_create', 'Square never confirmed an earlier checkout on this order.' );
+					}
+					if ( self::needs_unconfirmed_note( $fresh ) ) {
+						$fresh->add_order_note( __( 'Square never confirmed an earlier Terminal checkout on this order, and it may have been paid. Check the Square dashboard before taking this payment again.', 'square-terminal-for-woocommerce' ) );
+						$fresh->update_meta_data( self::META_UNCONFIRMED_NOTED, (string) $fresh->get_meta( '_sqtwc_current_attempt_id', true ) );
+						$fresh->save();
 					}
 					$ref = self::action_ref( $fresh );
 					if ( self::is_held( $fresh, $ref ) ) {

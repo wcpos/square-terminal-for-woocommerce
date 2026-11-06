@@ -221,4 +221,160 @@ final class LegacyAdoptionTest extends TestCase {
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
 		self::assertFalse( get_option( 'sqtwc_adoption_version' ) );
 	}
+
+	private const UNCONFIRMED_NOTE = 'Square never confirmed an earlier Terminal checkout on this order, and it may have been paid. Check the Square dashboard before taking this payment again.';
+
+	public function test_a_create_square_never_confirmed_holds_the_panel(): void {
+		$order = $this->order( 400, '', 'PENDING' );
+		$held  = Legacy_Adoption::adopt_order( 400 );
+		self::assertSame( 'sqtwc_adoption_unconfirmed_create', $held->get_error_code() );
+		self::assertFalse( Legacy_Adoption::is_deferral( $held ) );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+		self::assertSame( array(), $order->notes );
+	}
+
+	public function test_the_hold_is_decided_on_the_fresh_copy(): void {
+		// The order read before the lock shows the unconfirmed attempt; the copy read under it shows it closed.
+		$stale = $this->order( 401, '', 'PENDING' );
+		$GLOBALS['sqtwc_cleaned_post_caches']      = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( int $id ): void {
+			$GLOBALS['sqtwc_cleaned_post_caches'][] = $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $stale ) {
+			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held && '' !== (string) get_option( 'sqtwc_lock_401', '' ) && in_array( 401, $GLOBALS['sqtwc_cleaned_post_caches'] ?? array(), true ) ) {
+				$fresh = clone $stale;
+				$fresh->meta['_sqtwc_current_attempt_id'] = '';
+				return $fresh;
+			}
+			return $stale;
+		};
+		try {
+			self::assertNull( Legacy_Adoption::adopt_order( 401 ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'], $GLOBALS['sqtwc_clean_post_cache_callback'] );
+		}
+	}
+
+	public function test_a_live_pro_leg_is_not_held_by_an_unconfirmed_create(): void {
+		$this->order( 402, '', 'PENDING' );
+		$GLOBALS['sqtwc_ledger_rows'][402] = array( array( 'id' => 'row-pro', 'method_id' => 'sqtwc', 'status' => 'pending' ) );
+		self::assertNull( Legacy_Adoption::adopt_order( 402 ) );
+	}
+
+	public function test_an_unconfirmed_create_is_released_after_the_window_with_one_note(): void {
+		$order = $this->order( 403, '', 'PENDING' );
+		$order->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertNull( Legacy_Adoption::adopt_order( 403 ) );
+		self::assertSame( array( self::UNCONFIRMED_NOTE ), $order->notes );
+		self::assertSame( 'att-1', $order->meta[ Legacy_Adoption::META_UNCONFIRMED_NOTED ] );
+		self::assertNull( Legacy_Adoption::adopt_order( 403 ) );
+		self::assertCount( 1, $order->notes, 'One note per attempt' );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+	}
+
+	public function test_an_unconfirmed_create_with_no_start_time_is_released(): void {
+		$order = $this->order( 404, '', 'PENDING' );
+		$order->meta['_sqtwc_attempt_started'] = 0;
+		self::assertNull( Legacy_Adoption::adopt_order( 404 ) );
+		self::assertSame( array( self::UNCONFIRMED_NOTE ), $order->notes );
+	}
+
+	public function test_a_new_attempt_past_the_window_gets_its_own_note(): void {
+		$order = $this->order( 405, '', 'PENDING' );
+		$order->meta['_sqtwc_attempt_started']                = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		$order->meta[ Legacy_Adoption::META_UNCONFIRMED_NOTED ] = 'att-0';
+		self::assertNull( Legacy_Adoption::adopt_order( 405 ) );
+		self::assertSame( array( self::UNCONFIRMED_NOTE ), $order->notes );
+		self::assertSame( 'att-1', $order->meta[ Legacy_Adoption::META_UNCONFIRMED_NOTED ] );
+	}
+
+	public function test_a_paid_order_is_neither_held_nor_noted(): void {
+		$recent = $this->order( 406, '', 'PENDING' );
+		$recent->paid = true;
+		self::assertNull( Legacy_Adoption::adopt_order( 406 ) );
+		$old = $this->order( 407, '', 'PENDING' );
+		$old->paid = true;
+		$old->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertNull( Legacy_Adoption::adopt_order( 407 ) );
+		self::assertSame( array(), $old->notes );
+	}
+
+	public function test_a_closed_attempt_is_neither_held_nor_noted(): void {
+		$recent = $this->order( 408, '', 'PENDING' );
+		$recent->meta['_sqtwc_current_attempt_id'] = '';
+		self::assertNull( Legacy_Adoption::adopt_order( 408 ) );
+		$old = $this->order( 409, '', 'PENDING' );
+		$old->meta['_sqtwc_current_attempt_id'] = '';
+		$old->meta['_sqtwc_attempt_started']    = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertNull( Legacy_Adoption::adopt_order( 409 ) );
+		self::assertSame( array(), $old->notes );
+	}
+
+	public function test_a_final_status_is_neither_held_nor_noted(): void {
+		$this->order( 410, '', 'CANCELED' );
+		self::assertNull( Legacy_Adoption::adopt_order( 410 ) );
+		$old = $this->order( 411, '', 'CANCELED' );
+		$old->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		self::assertNull( Legacy_Adoption::adopt_order( 411 ) );
+		self::assertSame( array(), $old->notes );
+	}
+
+	public function test_a_held_lock_defers_the_release_note(): void {
+		$order = $this->order( 412, '', 'PENDING' );
+		$order->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		$GLOBALS['sqtwc_free_lock_held'] = true;
+		$deferred = Legacy_Adoption::adopt_order( 412 );
+		self::assertTrue( Legacy_Adoption::is_deferral( $deferred ) );
+		self::assertSame( array(), $order->notes );
+		self::assertArrayNotHasKey( Legacy_Adoption::META_UNCONFIRMED_NOTED, $order->meta );
+	}
+
+	public function test_the_upgrade_pass_drops_a_held_unconfirmed_order_from_the_queue(): void {
+		$this->order( 413, '', 'PENDING' );
+		$GLOBALS['sqtwc_order_query_results'] = array( 413 );
+		Legacy_Adoption::upgrade();
+		self::assertFalse( get_option( 'sqtwc_adoption_queue' ), 'Dropped: the panel render carries the hold from here' );
+		self::assertSame( Legacy_Adoption::VERSION, get_option( 'sqtwc_adoption_version' ) );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+	}
+
+	public function test_the_release_note_is_saved(): void {
+		$order = new class( 414 ) extends \SQTWC_Test_Order {
+			public int $saves = 0;
+			public function save() {
+				++$this->saves;
+			}
+		};
+		$order->meta = array( '_sqtwc_checkout_id' => '', '_sqtwc_checkout_status' => 'PENDING', '_sqtwc_current_attempt_id' => 'att-1', '_sqtwc_attempt_started' => time() - Legacy_Adoption::ADOPTION_WINDOW - 1 );
+		$GLOBALS['sqtwc_orders'][414] = $order;
+		self::assertNull( Legacy_Adoption::adopt_order( 414 ) );
+		self::assertSame( 1, $order->saves );
+		self::assertNull( Legacy_Adoption::adopt_order( 414 ) );
+		self::assertSame( 1, $order->saves, 'Noted once, saved once' );
+	}
+
+	public function test_the_release_note_is_decided_on_the_fresh_copy(): void {
+		// The order read before the lock needs its note; the copy read under it shows a parallel request wrote it.
+		$stale = $this->order( 415, '', 'PENDING' );
+		$stale->meta['_sqtwc_attempt_started'] = time() - Legacy_Adoption::ADOPTION_WINDOW - 1;
+		$fresh = clone $stale;
+		$fresh->meta[ Legacy_Adoption::META_UNCONFIRMED_NOTED ] = 'att-1';
+		$GLOBALS['sqtwc_cleaned_post_caches']      = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( int $id ): void {
+			$GLOBALS['sqtwc_cleaned_post_caches'][] = $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $stale, $fresh ) {
+			if ( \WCPOS\WooCommercePOS\Payments\Contract\Order_Lock::$held && '' !== (string) get_option( 'sqtwc_lock_415', '' ) && in_array( 415, $GLOBALS['sqtwc_cleaned_post_caches'] ?? array(), true ) ) {
+				return $fresh;
+			}
+			return $stale;
+		};
+		try {
+			self::assertNull( Legacy_Adoption::adopt_order( 415 ) );
+		} finally {
+			unset( $GLOBALS['sqtwc_wc_get_order_callback'], $GLOBALS['sqtwc_clean_post_cache_callback'] );
+		}
+		self::assertSame( array(), $stale->notes );
+		self::assertSame( array(), $fresh->notes, 'The parallel request already noted it' );
+	}
 }
