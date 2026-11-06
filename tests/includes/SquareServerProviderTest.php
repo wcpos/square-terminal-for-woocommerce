@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Refund_Reask;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Square_Server_Provider;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
@@ -627,5 +628,43 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( 'pending', $pending['status'] );
 		$this->assertCount( 3, array_unique( array( $expired['event_id'], $voided['event_id'], $pending['event_id'] ) ) );
 		$this->assertArrayNotHasKey( 'failure_reason', $expired );
+	}
+
+	public function test_sandbox_lists_squares_test_devices_without_asking_square(): void {
+		Gateway::reset_device_memo();
+		$expected = array_map(
+			static fn ( array $device ): array => array( 'id' => $device['id'], 'label' => $device['label'], 'status' => 'online' ),
+			Gateway::get_available_devices( 'sandbox' )
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertCount( 5, $readers );
+		$this->assertSame( $expected, $readers );
+		$this->assertSame( array( '9fa747a2-25ff-48ee-b078-04381f7c828f', '22cd266c-6246-4c06-9983-67f0c26346b0', '841100b9-ee60-4537-9bcf-e30b2ba5e215', '0a956d49-619a-4530-8e5e-8eac603ffc5e', 'da40d603-c2ea-4a65-8cfd-f42e36dab0c7' ), array_column( $readers, 'id' ) );
+		$this->assertCount( 0, $this->square->requests );
+		Gateway::reset_device_memo();
+	}
+
+	public function test_production_lists_the_paired_devices_square_returns(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::json(
+			200,
+			array(
+				'device_codes' => array(
+					array( 'id' => 'DC1', 'name' => 'Front counter', 'device_id' => 'DEV_FRONT', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+					array( 'id' => 'DC2', 'name' => 'Back counter', 'device_id' => 'DEV_BACK', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+				),
+			)
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertSame(
+			array(
+				array( 'id' => 'DEV_FRONT', 'label' => 'Front counter', 'status' => 'online' ),
+				array( 'id' => 'DEV_BACK', 'label' => 'Back counter', 'status' => 'online' ),
+			),
+			$readers
+		);
+		$this->assertCount( 1, $this->square->requests );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( '/v2/devices/codes', $this->square->requests[0]->getUri()->getPath() );
 	}
 }

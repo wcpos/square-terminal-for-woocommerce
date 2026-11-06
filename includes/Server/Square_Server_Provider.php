@@ -8,6 +8,7 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Server;
 
 use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
@@ -96,6 +97,13 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	 * {@inheritDoc}
 	 */
 	public function list_readers() {
+		if ( 'sandbox' === Settings::get_environment() ) {
+			// Square's sandbox has no paired devices; it takes these test device ids instead.
+			return array_map(
+				static fn ( array $device ): array => $device + array( 'status' => 'online' ),
+				Gateway::get_available_devices( 'sandbox' )
+			);
+		}
 		try {
 			$devices = new SquareDeviceAdapter( $this->factory->create( null, Settings::get_environment(), array( 'maxRetries' => 0 ) ) );
 			$readers = array();
