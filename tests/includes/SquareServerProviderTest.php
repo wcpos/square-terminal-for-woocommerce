@@ -10,6 +10,7 @@ use Psr\Http\Message\ResponseInterface;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Refund_Reask;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Square_Server_Provider;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+use WCPOS\WooCommercePOS\SquareTerminal\WebhookHandler;
 
 /** Queued Square answers; each request pops one. */
 final class QueueTransport implements ClientInterface {
@@ -61,6 +62,7 @@ final class SquareServerProviderTest extends TestCase {
 
 	protected function tearDown(): void {
 		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'], $GLOBALS['sqtwc_orders'], $GLOBALS['sqtwc_adopted'] );
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
 		Settings::reset_cache_for_tests();
 	}
 
@@ -112,7 +114,13 @@ final class SquareServerProviderTest extends TestCase {
 		return self::json( 200, array( 'refund' => array( 'id' => 'RF1', 'status' => $status, 'payment_id' => 'PAY1', 'amount_money' => array( 'amount' => 500, 'currency' => 'EUR' ) ) ) );
 	}
 
+	private function set( array $settings ): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = $settings + $GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'];
+		Settings::reset_cache_for_tests();
+	}
+
 	public function test_create_sends_the_row_as_idempotency_key_and_reference_and_names_the_deadline(): void {
+		$this->set( array( 'skip_receipt_screen' => 'yes', 'collect_signature' => 'no' ) );
 		$this->square->queue[] = self::checkout( 'PENDING' );
 		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
 		$this->assertSame( 'sandbox:TC1', $result['ref'] );
@@ -126,6 +134,30 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( 'PT5M', $body['checkout']['deadline_duration'] );
 		$this->assertSame( 'connect.squareupsandbox.com', $this->square->requests[0]->getUri()->getHost() );
 		$this->assertSame( 'Bearer sb-token', $this->square->requests[0]->getHeaderLine( 'Authorization' ) );
+		// The old panel's device options follow the settings, as AjaxHandler sends them.
+		$this->assertTrue( $body['checkout']['device_options']['skip_receipt_screen'] );
+		$this->assertFalse( $body['checkout']['device_options']['collect_signature'] ?? false );
+		$this->set( array( 'skip_receipt_screen' => 'no', 'collect_signature' => 'yes' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$this->adapter()->create_reader_action( array( 'id' => 'b3f1c2d4-1111-4222-8333-444455556666' ) + $this->row(), 'DEV1' );
+		$this->assertFalse( $this->square->body( 1 )['checkout']['device_options']['skip_receipt_screen'] ?? false );
+		$this->assertTrue( $this->square->body( 1 )['checkout']['device_options']['collect_signature'] );
+	}
+
+	public function test_a_replay_after_a_settings_change_sends_the_first_body(): void {
+		$this->set( array( 'skip_receipt_screen' => 'no', 'collect_signature' => 'yes' ) );
+		$this->square->queue[] = self::lost();
+		$this->assertInstanceOf( \WP_Error::class, $this->adapter()->create_reader_action( $this->row(), 'DEV1' ) );
+		$this->set( array( 'skip_receipt_screen' => 'yes', 'collect_signature' => 'no' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		// Square answers a replayed key with another body as IDEMPOTENCY_KEY_REUSED: the replay is the first body.
+		$this->assertSame( $this->square->body( 0 ), $this->square->body( 1 ) );
+		$this->assertTrue( $this->square->body( 1 )['checkout']['device_options']['collect_signature'] );
+		$this->assertSame(
+			array( 'skip_receipt_screen' => false, 'collect_signature' => true ),
+			$GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ]
+		);
 	}
 
 	/** @dataProvider unanswered_creates */
@@ -344,6 +376,80 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertCount( 2, $this->square->requests );
 	}
 
+	private static function allocation( ?string $provider_ref ): array {
+		return array( 'id' => 501, 'amount' => '5.00', 'status' => 'pending', 'provider_ref' => $provider_ref );
+	}
+
+	/** @dataProvider refund_reads */
+	public function test_fetch_refund_maps_squares_refund_status( string $square, string $pro ): void {
+		$this->refund_record();
+		$this->square->queue = array( self::refund_response( $square ) );
+		$this->assertSame( array( 'status' => $pro, 'provider_ref' => 'RF1' ), $this->adapter()->fetch_refund( $this->row(), self::allocation( 'RF1' ) ) );
+		$this->assertSame( 'GET', $this->square->requests[0]->getMethod() );
+		$this->assertSame( '/v2/refunds/RF1', $this->square->requests[0]->getUri()->getPath() );
+	}
+
+	public function test_fetch_refund_reads_the_environment_the_refund_was_made_in(): void {
+		$refund = $this->refund_record();
+		$refund->update_meta_data( Refund_Reask::META_REQUEST, array( 'environment' => 'production' ) ); // The class runs on sandbox.
+		$this->square->queue = array( self::refund_response( 'COMPLETED' ) );
+		$this->assertSame( array( 'status' => 'succeeded', 'provider_ref' => 'RF1' ), $this->adapter()->fetch_refund( $this->row(), self::allocation( 'RF1' ) ) );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( 'Bearer prod-token', $this->square->requests[0]->getHeaderLine( 'Authorization' ) );
+	}
+
+	public static function refund_reads(): array {
+		return array(
+			'completed' => array( 'COMPLETED', 'succeeded' ),
+			'pending'   => array( 'PENDING', 'pending' ),
+			'rejected'  => array( 'REJECTED', 'failed' ),
+			'failed'    => array( 'FAILED', 'failed' ),
+		);
+	}
+
+	public function test_an_unanswered_refund_is_settled_by_pros_sweep_through_the_id_the_re_ask_wrote(): void {
+		$refund = $this->refund_record();
+		$this->square->queue = array( self::lost() );
+		$this->assertSame( array( 'status' => 'pending', 'provider_ref' => null ), $this->adapter()->refund( $this->row(), 501, '5.00' ) );
+		$this->square->queue = array( self::refund_response( 'PENDING' ) );
+		Refund_Reask::run( 501, 1, 99, $this->adapter() );
+		$note = end( $GLOBALS['sqtwc_orders'][99]->notes );
+		$this->assertStringContainsString( 'Square accepted refund #501 (RF1) and it is still pending.', $note );
+		$this->assertStringNotContainsString( 'confirmed', $note );
+		// Pro's allocation still has no provider_ref (an older ledger stored ''): the record's id is read.
+		$this->square->queue = array( self::refund_response( 'COMPLETED' ), self::refund_response( 'REJECTED' ) );
+		$this->assertSame( array( 'status' => 'succeeded', 'provider_ref' => 'RF1' ), $this->adapter()->fetch_refund( $this->row(), self::allocation( null ) ) );
+		$this->assertSame( array( 'status' => 'failed', 'provider_ref' => 'RF1' ), $this->adapter()->fetch_refund( $this->row(), self::allocation( '' ) ) );
+		$this->assertSame( '/v2/refunds/RF1', $this->square->requests[2]->getUri()->getPath() );
+		$this->assertSame( '/v2/refunds/RF1', $this->square->requests[3]->getUri()->getPath() );
+	}
+
+	/** @dataProvider failed_refund_reads */
+	public function test_a_failed_refund_read_is_unanswered_never_failed( $answer ): void {
+		$this->refund_record();
+		$this->square->queue = array( $answer );
+		$error = $this->adapter()->fetch_refund( $this->row(), self::allocation( 'RF1' ) );
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertTrue( $error->get_error_data()['indeterminate'] );
+	}
+
+	public static function failed_refund_reads(): array {
+		return array(
+			'lost'      => array( self::lost() ),
+			'server'    => array( self::error( 500, 'INTERNAL_SERVER_ERROR' ) ),
+			'no refund' => array( self::json( 200, array() ) ),
+		);
+	}
+
+	public function test_a_refund_square_has_not_answered_yet_keeps_the_sweep_asking(): void {
+		$this->refund_record();
+		$error = $this->adapter()->fetch_refund( $this->row(), self::allocation( null ) );
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertNotSame( 'wcpos_capture_mode_unsupported', $error->get_error_code() );
+		$this->assertTrue( $error->get_error_data()['indeterminate'] );
+		$this->assertSame( array(), $this->square->requests );
+	}
+
 	public function test_the_re_ask_waits_again_while_square_is_silent_and_then_tells_staff(): void {
 		$refund = $this->refund_record();
 		$this->square->queue = array( self::lost() );
@@ -444,6 +550,16 @@ final class SquareServerProviderTest extends TestCase {
 		$result = $this->adapter()->verify_webhook( $this->webhook( self::event() ) );
 		$this->assertSame( 'bbbbbbbb-1111-4222-8333-444455556666', $result['payment_id'] );
 		$this->assertSame( array( array( 'square', 'sandbox:TC1' ) ), $GLOBALS['sqtwc_adoption_lookups'] );
+	}
+
+	public function test_a_verified_delivery_on_pros_route_reads_verified_on_the_settings_screen(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = true;
+		$this->adapter()->verify_webhook( $this->webhook( self::event(), 'wrong' ) );
+		$this->assertNull( WebhookHandler::last_verified_delivery(), 'A bad signature records nothing' );
+		$this->square->queue = array( self::checkout( 'IN_PROGRESS' ) );
+		$this->adapter()->verify_webhook( $this->webhook( self::event() ) );
+		$this->assertNotNull( WebhookHandler::last_verified_delivery() );
+		$this->assertStringContainsString( 'sqtwc-webhook--ok', \WCPOS\WooCommercePOS\SquareTerminal\Gateway::render_webhook_status() );
 	}
 
 	public function test_a_checkout_that_is_not_wcpos_is_acknowledged_and_an_unknown_one_is_404(): void {

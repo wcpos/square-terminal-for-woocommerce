@@ -20,7 +20,8 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Exceptions\SquareApiExcept
  * idempotency key; when the POST goes unanswered the record stands as pending, the order says so,
  * and this cron replays the identical request under the same key until Square answers (it hands
  * back the refund the first request made, or makes it now) or the tries run out with a note for
- * staff. Pro's ledger shows the refund pending throughout; nothing in Pro re-reads a pending refund.
+ * staff. Pro's ledger keeps the allocation pending with no provider_ref; Pro's refund sweep re-reads
+ * it through Square_Server_Provider::fetch_refund(), which finds the refund id this writes.
  */
 final class Refund_Reask {
 	/** Cron hook; arguments are the refund id, the try number and the parent order id. */
@@ -141,9 +142,15 @@ final class Refund_Reask {
 		}
 		$refund->update_meta_data( self::META_REFUND, (string) $result['id'] );
 		$refund->save();
-		$failed = in_array( $result['status'], array( 'REJECTED', 'FAILED' ), true );
+		$status = Square_Server_Provider::refund_status( (string) $result['status'] );
 		/* translators: 1: refund id, 2: Square refund id, 3: Square refund status. */
-		$order->add_order_note( sprintf( $failed ? __( 'Square reports refund #%1$d (%2$s) as %3$s: no money was returned. The record still counts as refunded here: delete it, then refund from the Square dashboard if the money is owed.', 'square-terminal-for-woocommerce' ) : __( 'Square confirmed refund #%1$d (%2$s): %3$s.', 'square-terminal-for-woocommerce' ), $refund_id, (string) $result['id'], (string) $result['status'] ) );
+		$note = 'failed' === $status ? __( 'Square reports refund #%1$d (%2$s) as %3$s: no money was returned. The record still counts as refunded here: delete it, then refund from the Square dashboard if the money is owed.', 'square-terminal-for-woocommerce' ) : __( 'Square confirmed refund #%1$d (%2$s): %3$s.', 'square-terminal-for-woocommerce' );
+		if ( 'pending' === $status ) {
+			// Not confirmed: Pro's refund sweep reads it again until Square ends it.
+			/* translators: 1: refund id, 2: Square refund id. */
+			$note = __( 'Square accepted refund #%1$d (%2$s) and it is still pending.', 'square-terminal-for-woocommerce' );
+		}
+		$order->add_order_note( sprintf( $note, $refund_id, (string) $result['id'], (string) $result['status'] ) );
 		$order->save();
 	}
 

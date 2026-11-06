@@ -231,6 +231,15 @@ final class Settings {
 	}
 
 	/**
+	 * The URL the settings screen shows and judges webhook health by. Under Pro's panel it is the URL
+	 * Square_Server_Provider signs over, and the override serves the old panel only: a site whose
+	 * public URL differs from rest_url() fails signature on Pro's route and settles by polling.
+	 */
+	public static function get_displayed_webhook_url(): string {
+		return self::uses_pro_panel() ? self::get_pro_webhook_url() : self::get_webhook_notification_url();
+	}
+
+	/**
 	 * Return the webhook route this plugin actually serves.
 	 */
 	public static function get_default_webhook_url(): string {
