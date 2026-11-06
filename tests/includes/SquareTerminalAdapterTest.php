@@ -259,7 +259,35 @@ final class SquareTerminalAdapterTest extends TestCase {
 		$checkouts            = new SpySearchCheckoutsClient();
 		$checkouts->responses = array( new SearchTerminalCheckoutsResponse( array() ) );
 
-		self::assertSame( array(), $this->search_adapter( $checkouts )->search_checkouts( 'DEVICE123', '2026-11-06T10:00:00Z' ) );
+		set_error_handler(
+			static function ( int $severity, string $message, string $file, int $line ): bool {
+				throw new \ErrorException( $message, 0, $severity, $file, $line );
+			}
+		);
+		try {
+			$rows = $this->search_adapter( $checkouts )->search_checkouts( 'DEVICE123', '2026-11-06T10:00:00Z' );
+		} finally {
+			restore_error_handler();
+		}
+
+		self::assertSame( array(), $rows );
+		self::assertCount( 1, $checkouts->requests );
+	}
+
+	public function test_search_ends_after_one_page_on_an_empty_cursor(): void {
+		$checkouts            = new SpySearchCheckoutsClient();
+		$checkouts->responses = array(
+			new SearchTerminalCheckoutsResponse(
+				array(
+					'checkouts' => array( SpySearchCheckoutsClient::checkout( 'chk_1' ) ),
+					'cursor'    => '',
+				)
+			),
+		);
+
+		$rows = $this->search_adapter( $checkouts )->search_checkouts( 'DEVICE123', '2026-11-06T10:00:00Z' );
+
+		self::assertSame( array( 'chk_1' ), array_column( $rows, 'id' ) );
 		self::assertCount( 1, $checkouts->requests );
 	}
 

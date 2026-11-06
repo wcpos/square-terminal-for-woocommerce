@@ -112,7 +112,7 @@ namespace {
 		class SQTWC_Test_Refund extends WC_Order_Refund {
 			public $parent_id;
 			public $reason = '';
-			public $saves = 0;
+			public int $saves = 0;
 			public function __construct( $id, $parent_id ) { parent::__construct( $id ); $this->parent_id = $parent_id; }
 			public function get_parent_id() { return $this->parent_id; }
 			public function get_reason() { return $this->reason; }

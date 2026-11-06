@@ -171,6 +171,7 @@ final class PaymentSweeperTest extends TestCase {
 	private function assert_unchanged( \SQTWC_Test_Order $order, array $meta_before ): void {
 		self::assertSame( $meta_before, $order->meta );
 		self::assertSame( array(), $order->notes );
+		self::assertSame( 0, $order->saves );
 		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
@@ -380,6 +381,8 @@ final class PaymentSweeperTest extends TestCase {
 		$log = $order->get_meta( '_sqtwc_payment_log' );
 		self::assertSame( 'info', end( $log )['level'] );
 		self::assertSame( 'Square found the Terminal checkout it had not confirmed.', end( $log )['msg'] );
+		// The fake reconciler does not save an IN_PROGRESS checkout, so this one save is the match's own.
+		self::assertSame( 1, $order->saves );
 		self::assertSame( array(), $order->notes );
 		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
@@ -426,6 +429,7 @@ final class PaymentSweeperTest extends TestCase {
 		$log = $order->get_meta( '_sqtwc_payment_log' );
 		self::assertSame( 'warning', end( $log )['level'] );
 		self::assertSame( self::RELEASE_NOTE, end( $log )['msg'] );
+		self::assertSame( 1, $order->saves );
 		self::assertSame( array(), $adapter->calls );
 		self::assertSame( array(), $reconciler->calls );
 		self::assertArrayNotHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
@@ -518,6 +522,49 @@ final class PaymentSweeperTest extends TestCase {
 		$this->assert_unchanged( $order, $before );
 	}
 
+	public function test_unconfirmed_create_saved_without_a_device_is_not_searched(): void {
+		$this->assert_request_is_not_searched( array( 'device_id' => null ) );
+	}
+
+	public function test_unconfirmed_create_saved_without_an_amount_is_not_searched(): void {
+		$this->assert_request_is_not_searched( array( 'amount' => null ) );
+	}
+
+	public function test_unconfirmed_create_saved_without_a_currency_is_not_searched(): void {
+		$this->assert_request_is_not_searched( array( 'currency' => null ) );
+	}
+
+	private function assert_request_is_not_searched( array $request ): void {
+		$order   = $this->unconfirmed_order( 700, $request );
+		$before  = $order->meta;
+		$adapter = new SweeperAdapter();
+
+		( new PaymentSweeper( $adapter, new SweeperReconciler(), new OrderLock() ) )->sweep();
+
+		self::assertSame( array(), $adapter->search_calls );
+		$this->assert_unchanged( $order, $before );
+	}
+
+	public function test_unconfirmed_create_row_with_an_empty_id_is_no_match(): void {
+		$this->assert_row_is_no_match( array( 'id' => '' ) );
+	}
+
+	public function test_unconfirmed_create_row_without_an_id_is_no_match(): void {
+		$order = $this->unconfirmed_order();
+		$row   = $this->row();
+		unset( $row['id'] );
+		$adapter                = new SweeperAdapter();
+		$adapter->search_result = array( $row );
+		$reconciler             = new SweeperReconciler();
+
+		( new PaymentSweeper( $adapter, $reconciler, new OrderLock() ) )->sweep();
+
+		self::assertCount( 1, $adapter->search_calls );
+		$this->assert_released( $order );
+		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_id' ) );
+		self::assertSame( array(), $reconciler->calls );
+	}
+
 	public function test_confirmed_attempt_is_not_searched(): void {
 		$order = $this->unconfirmed_order();
 		$order->update_meta_data( '_sqtwc_checkout_id', 'chk_known' );
@@ -557,6 +604,7 @@ final class PaymentSweeperTest extends TestCase {
 
 		self::assertCount( 1, $adapter->search_calls );
 		$this->assert_released( $order );
+		self::assertSame( '', $order->get_meta( '_sqtwc_checkout_id' ) );
 		self::assertSame( array(), $reconciler->calls );
 	}
 
