@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file. Release notes f
 
 ## [1.0.0]
 
-The stable release of 1.0.0-beta1, for WCPOS 2.0. The plugin is unchanged since the beta; the changes are listed under 1.0.0-beta1 below.
+The stable release of 1.0.0-beta1, for WCPOS 2.0, with the fixes below. The rest of the changes are listed under 1.0.0-beta1.
 
 ### Fixed
 
