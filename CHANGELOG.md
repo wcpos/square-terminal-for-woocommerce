@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file. Release notes f
 - Checkouts started from WCPOS Pro's panel ignored "Skip receipt screen" and "Collect signature". They now follow both settings.
 - A refund Square answered as pending was never checked again, so a later rejection went unnoticed. WCPOS Pro's refund sweep now reads it until Square completes or rejects it, and the order note no longer calls it confirmed.
 - An order whose Square checkout was never confirmed before the upgrade could be charged again from WCPOS Pro's panel. The panel now waits an hour from that attempt, then opens with an order note telling staff to check the Square dashboard.
+- When Square did not answer a checkout started from WCPOS Pro's panel and Environment was switched before it was asked again, the plugin asked the other Square account, so a checkout the customer could still pay was never found. It now asks again in the environment the checkout was started in.
 
 ## [1.0.0-beta1] - 2026-11-02
 

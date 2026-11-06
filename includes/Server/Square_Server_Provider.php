@@ -118,8 +118,7 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	 * {@inheritDoc}
 	 */
 	public function create_reader_action( array $row, string $reader_id ) {
-		$environment = Settings::get_environment();
-		$order       = wc_get_order( (int) $row['order_id'] );
+		$order = wc_get_order( (int) $row['order_id'] );
 		if ( ! $order ) {
 			return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'square-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		}
@@ -129,13 +128,19 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 			$snapshot[ $row['id'] ] = array(
 				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
 				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
+				'environment'         => Settings::get_environment(),
 			);
 			$order->update_meta_data( self::DEVICE_OPTIONS_META, array_filter( $snapshot, 'is_array' ) );
 			$order->save();
 		}
+		// A replay goes to the environment the first POST went to: after Environment is switched, the
+		// first checkout lives only there. An entry saved before the environment was kept falls back.
+		$options     = $snapshot[ $row['id'] ];
+		$environment = (string) ( $options['environment'] ?? Settings::get_environment() );
+		unset( $options['environment'] ); // Not Square's: the replayed body stays byte-identical.
 		try {
 			$checkout = $this->terminal( $environment )->create_checkout(
-				$snapshot[ $row['id'] ] + array(
+				$options + array(
 					'idempotency_key'   => (string) $row['id'],
 					'amount'            => Money_Units::minor( (string) $row['amount'], (string) $row['currency'] ),
 					'currency'          => strtoupper( (string) $row['currency'] ),
@@ -148,6 +153,10 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 					'deadline_duration' => self::DEADLINE,
 				)
 			);
+			if ( '' === (string) ( $checkout['id'] ?? '' ) ) {
+				// A 2xx without a checkout id leaves the checkout unknown: unanswered, and the keyed replay recovers it.
+				throw new \UnexpectedValueException( 'Square answered the create without a checkout.' );
+			}
 
 			return array(
 				'ref'        => self::ref( $environment, (string) $checkout['id'] ),

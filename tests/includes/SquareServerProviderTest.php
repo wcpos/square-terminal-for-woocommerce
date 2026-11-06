@@ -155,9 +155,49 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( $this->square->body( 0 ), $this->square->body( 1 ) );
 		$this->assertTrue( $this->square->body( 1 )['checkout']['device_options']['collect_signature'] );
 		$this->assertSame(
-			array( 'skip_receipt_screen' => false, 'collect_signature' => true ),
+			array( 'skip_receipt_screen' => false, 'collect_signature' => true, 'environment' => 'sandbox' ),
 			$GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ]
 		);
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 ) );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout'] );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout']['device_options'] );
+	}
+
+	public function test_a_replay_after_an_environment_switch_goes_to_the_environment_of_the_first_post(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::lost();
+		$this->assertInstanceOf( \WP_Error::class, $this->adapter()->create_reader_action( $this->row(), 'DEV1' ) );
+		$this->set( array( 'environment' => 'sandbox' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		// The first checkout exists only in production; the replay must reach it there under the same key.
+		$this->assertSame( 'production:TC1', $result['ref'] );
+		foreach ( array( 0, 1 ) as $i ) {
+			$this->assertSame( 'connect.squareup.com', $this->square->requests[ $i ]->getUri()->getHost() );
+			$this->assertSame( 'Bearer prod-token', $this->square->requests[ $i ]->getHeaderLine( 'Authorization' ) );
+		}
+		$this->assertSame( (string) $this->square->requests[0]->getBody(), (string) $this->square->requests[1]->getBody() );
+	}
+
+	public function test_an_entry_saved_before_the_environment_was_kept_follows_the_setting_and_is_not_rewritten(): void {
+		$entry = array( 'skip_receipt_screen' => false, 'collect_signature' => true );
+		$GLOBALS['sqtwc_orders'][99]->update_meta_data( Square_Server_Provider::DEVICE_OPTIONS_META, array( self::ROW => $entry ) );
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$this->assertSame( 'production:TC1', $this->adapter()->create_reader_action( $this->row(), 'DEV1' )['ref'] );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( $entry, $GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ] );
+	}
+
+	public function test_a_create_answered_without_a_checkout_is_unanswered_like_a_transport_loss(): void {
+		$this->square->queue[] = self::lost();
+		$lost = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->square->queue[] = self::json( 200, array() );
+		$empty = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertInstanceOf( \WP_Error::class, $empty );
+		$this->assertSame( $lost->get_error_code(), $empty->get_error_code() );
+		$this->assertTrue( $empty->get_error_data()['indeterminate'] );
+		$this->assertSame( $lost->get_error_data()['status'] ?? null, $empty->get_error_data()['status'] ?? null );
 	}
 
 	/** @dataProvider unanswered_creates */
