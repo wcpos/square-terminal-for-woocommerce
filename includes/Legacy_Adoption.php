@@ -47,20 +47,28 @@ final class Legacy_Adoption {
 	/** Checkout statuses the old panel still polls. */
 	private const LIVE_CHECKOUT_STATUSES = array( 'PENDING', 'IN_PROGRESS', 'CANCEL_REQUESTED' );
 
+	/** Transient that pauses the upgrade pass after Square could not be read about an attempt's environment. */
+	private const READ_PAUSE = 'sqtwc_adoption_read_pause';
+
+	/** How long that pause lasts: no request pays Square's ten second timeout per order meanwhile. */
+	private const READ_PAUSE_SECONDS = 60;
+
 	/**
 	 * How old an attempt may be and still be adopted: Square cancels an unpaid checkout five
 	 * minutes after its create, and the old sweep reconciles a checkout once it is ten minutes
 	 * old, so a pointer older than an hour names a checkout that has long ended (the sweep
-	 * closes it) or one made under settings since changed (another environment), which Pro could
-	 * neither poll nor cancel. The old sweep stays in charge of those; until it has read them,
-	 * Pro's panel is held back (has_stale_live_pointer()).
+	 * closes it). It also bounds how long an attempt saved without its environment, which Square
+	 * could not be asked about, keeps being asked. The old sweep stays in charge of those; until it
+	 * has read them, Pro's panel is held back (has_stale_live_pointer()).
 	 */
 	public const ADOPTION_WINDOW = HOUR_IN_SECONDS;
 
 	/**
 	 * The action reference Pro's provider uses for the attempt the old panel started: the
-	 * order's current checkout while it is still live, in the current environment. '' for a
-	 * final checkout or none. An attempt whose create Square never confirmed has no checkout id
+	 * order's current checkout while it is still live, in the environment it was made in
+	 * (ref_for(): the reference kept at adoption, else the environment the attempt saved, else the
+	 * current one, which adopt_order() confirms with Square). '' for a final checkout or none.
+	 * An attempt whose create Square never confirmed has no checkout id
 	 * and cannot be adopted; the old sweep keeps the order indexed but cannot resolve it, so Pro's
 	 * panel is held for the adoption window from that attempt (has_unconfirmed_create()).
 	 *
@@ -74,7 +82,39 @@ final class Legacy_Adoption {
 			return '';
 		}
 
-		return Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+		return self::ref_for( $order, $checkout_id );
+	}
+
+	/**
+	 * The environment the old panel saved with the order's current attempt, '' for none: the last
+	 * stable release (0.8.7) saved its attempts without one.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	private static function saved_environment( $order ): string {
+		$request     = $order->get_meta( '_sqtwc_attempt_request', true );
+		$environment = is_array( $request ) ? (string) ( $request['environment'] ?? '' ) : '';
+
+		return in_array( $environment, array( 'sandbox', 'production' ), true ) ? $environment : '';
+	}
+
+	/**
+	 * The action reference for a checkout of this order: the one kept at adoption when it names
+	 * this checkout; else, for the current checkout, the environment its attempt saved; else the
+	 * current environment's. An earlier checkout is not the current pointer, so the saved
+	 * environment says nothing about it.
+	 *
+	 * @param \WC_Order $order       Order.
+	 * @param string    $checkout_id Square checkout id.
+	 */
+	private static function ref_for( $order, string $checkout_id ): string {
+		$adopted = (string) $order->get_meta( self::META_ADOPTED, true );
+		if ( '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ) {
+			return $adopted;
+		}
+		$saved = (string) $order->get_meta( '_sqtwc_checkout_id', true ) === $checkout_id ? self::saved_environment( $order ) : '';
+
+		return Square_Server_Provider::ref( '' !== $saved ? $saved : Settings::get_environment(), $checkout_id );
 	}
 
 	/**
@@ -209,8 +249,7 @@ final class Legacy_Adoption {
 		if ( '' === $checkout_id || ! function_exists( 'wcpos_pro_payment_id_for_action' ) || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
 			return false;
 		}
-		$adopted    = (string) $order->get_meta( self::META_ADOPTED, true );
-		$ref        = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+		$ref        = self::ref_for( $order, $checkout_id );
 		$payment_id = wcpos_pro_payment_id_for_action( Square_Server_Provider::PROVIDER, $ref );
 		if ( null === $payment_id ) {
 			return false;
@@ -221,8 +260,7 @@ final class Legacy_Adoption {
 	}
 
 	/**
-	 * Whether Pro owns a checkout of this order, by its id: the reference kept at adoption when
-	 * it names this checkout, else the current environment's.
+	 * Whether Pro owns a checkout of this order, by its id and the reference ref_for() gives it.
 	 *
 	 * @param \WC_Order $order       Order.
 	 * @param string    $checkout_id Square checkout id.
@@ -231,10 +269,7 @@ final class Legacy_Adoption {
 		if ( '' === $checkout_id || ! function_exists( 'wcpos_pro_payment_id_for_action' ) ) {
 			return false;
 		}
-		$adopted = (string) $order->get_meta( self::META_ADOPTED, true );
-		$ref     = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
-
-		return self::owned_by_pro( $order, $ref );
+		return self::owned_by_pro( $order, self::ref_for( $order, $checkout_id ) );
 	}
 
 	/**
@@ -248,8 +283,7 @@ final class Legacy_Adoption {
 		if ( '' === $checkout_id || ! function_exists( 'wcpos_pro_payment_id_for_action' ) || ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
 			return false;
 		}
-		$adopted    = (string) $order->get_meta( self::META_ADOPTED, true );
-		$ref        = '' !== $adopted && Square_Server_Provider::parse_ref( $adopted )[1] === $checkout_id ? $adopted : Square_Server_Provider::ref( Settings::get_environment(), $checkout_id );
+		$ref        = self::ref_for( $order, $checkout_id );
 		$payment_id = wcpos_pro_payment_id_for_action( Square_Server_Provider::PROVIDER, $ref );
 		if ( null === $payment_id ) {
 			return false;
@@ -301,7 +335,7 @@ final class Legacy_Adoption {
 	 * marked done; it runs when the merchant switches to a paired Terminal.
 	 */
 	public static function upgrade(): void {
-		if ( version_compare( (string) get_option( self::VERSION_OPTION, '0' ), self::VERSION, '>=' ) || ! Settings::uses_pro_panel() ) {
+		if ( version_compare( (string) get_option( self::VERSION_OPTION, '0' ), self::VERSION, '>=' ) || ! Settings::uses_pro_panel() || false !== get_transient( self::READ_PAUSE ) ) {
 			return;
 		}
 		// The candidates are snapshotted once, as order ids, when the pass begins: every order
@@ -340,6 +374,11 @@ final class Legacy_Adoption {
 						'code' => $result->get_error_code(),
 					)
 				);
+				if ( 'sqtwc_adoption_environment_unread' === $result->get_error_code() ) {
+					// Square is not answering: the rest of the page would wait out the same timeout.
+					set_transient( self::READ_PAUSE, 1, self::READ_PAUSE_SECONDS );
+					break;
+				}
 				continue;
 			}
 			if ( is_wp_error( $result ) ) {
@@ -361,12 +400,12 @@ final class Legacy_Adoption {
 	}
 
 	/**
-	 * Whether a refusal is a passing one (a till at work), to be retried, rather than final.
+	 * Whether a refusal is a passing one (a till at work, or Square not read), to be retried, rather than final.
 	 *
 	 * @param \WP_Error $error Refusal.
 	 */
 	public static function is_deferral( \WP_Error $error ): bool {
-		return in_array( $error->get_error_code(), array( 'wcpos_payment_locked', 'sqtwc_adoption_no_lock', 'sqtwc_adoption_completing' ), true );
+		return in_array( $error->get_error_code(), array( 'wcpos_payment_locked', 'sqtwc_adoption_no_lock', 'sqtwc_adoption_completing', 'sqtwc_adoption_environment_unread' ), true );
 	}
 
 	/**
@@ -428,6 +467,18 @@ final class Legacy_Adoption {
 					}
 					if ( '' === $ref || self::is_adopted( $ref ) || $fresh->is_paid() || ! $fresh->needs_payment() ) {
 						return null;
+					}
+					if ( '' === self::saved_environment( $fresh ) ) {
+						// Saved before the environment was kept: only Square's answer says the checkout is
+						// this order's in the environment the reference names. Anything but an answer proves nothing.
+						list( $environment, $checkout_id ) = Square_Server_Provider::parse_ref( $ref );
+						$reference = ( new Square_Server_Provider() )->checkout_reference( $environment, $checkout_id );
+						if ( is_wp_error( $reference ) ) {
+							return new \WP_Error( 'sqtwc_adoption_environment_unread', 'Square could not be asked which environment this checkout was made in.' );
+						}
+						if ( 'woocommerce_order_' . $fresh->get_id() !== $reference ) {
+							return new \WP_Error( 'sqtwc_adoption_other_environment', 'This checkout is not this order\'s in the current Square environment.' );
+						}
 					}
 					$row = wcpos_pro_adopt_legacy_attempt( $fresh, Gateway::ID, $ref, (string) $fresh->get_total(), $fresh->get_currency() );
 					if ( is_array( $row ) ) {

@@ -14,6 +14,7 @@ All notable changes to this project are documented in this file. Release notes f
 - In sandbox, WCPOS Pro's panel listed no readers, because Square's sandbox has no paired devices. It now lists Square's five sandbox test devices, as the old panel did.
 - A payment started from the POS could put a second checkout on a Terminal while one the old payment page started was still open or never confirmed by Square. The POS now refuses that payment and tells staff what to check first.
 - When Square's answer to a new Terminal checkout was lost, the order stayed held with no way to learn whether the checkout existed. The background check now asks Square for that checkout and records it, or closes the attempt with an order note when Square has none.
+- After upgrading, a Terminal checkout the old payment page left open was handed to WCPOS Pro in whichever environment the settings named that day, so if Environment had been switched since, Pro checked and cancelled it in the wrong Square account. Pro now gets the environment the checkout was made in; for a checkout from before this was recorded, the plugin first asks Square in the current environment and, if the checkout is not there, the payment page tells staff to check the Square dashboard.
 
 ## [1.0.0-beta1] - 2026-11-02
 
