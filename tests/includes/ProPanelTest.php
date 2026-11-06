@@ -1,12 +1,15 @@
 <?php
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
+use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 use WCPOS\WooCommercePOS\SquareTerminal\AjaxHandler;
 use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\CheckoutReconciler;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
+
+require_once __DIR__ . '/SquareServerProviderTest.php'; // QueueTransport.
 
 /** Under Pro's panel the page is Pro's; the old paths neither start nor settle a payment Pro owns. */
 final class ProPanelTest extends TestCase {
@@ -42,6 +45,7 @@ final class ProPanelTest extends TestCase {
 			$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
 			$order->meta['_sqtwc_device_id']          = 'DEV1';
 			$order->meta['_sqtwc_attempt_started']    = time() - 60;
+			$order->meta['_sqtwc_attempt_request']    = array( 'environment' => 'sandbox' );
 		}
 		$GLOBALS['sqtwc_orders'][ $id ] = $order;
 		return $order;
@@ -91,6 +95,25 @@ final class ProPanelTest extends TestCase {
 		$html = $this->fields();
 		self::assertStringContainsString( 'Square never confirmed an earlier Terminal payment on this order, and it may still be open.', $html );
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_panels'], 'No second charge beside a checkout Square may have made' );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+	}
+
+	public function test_a_checkout_square_does_not_place_on_this_order_holds_the_panel_with_a_notice(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['sandbox_access_token'] = 'sb-token';
+		Settings::reset_cache_for_tests();
+		$order = $this->order( 99, 'TC1', 'IN_PROGRESS' );
+		unset( $order->meta['_sqtwc_attempt_request'] ); // Saved by 0.8.7: no environment, so Square is asked.
+		$square        = new QueueTransport();
+		$square->queue = array( new Response( 404, array( 'Content-Type' => 'application/json' ), '{"errors":[{"category":"INVALID_REQUEST_ERROR","code":"NOT_FOUND"}]}' ) );
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'] = $square;
+		try {
+			$html = $this->fields();
+		} finally {
+			unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'] );
+		}
+		self::assertStringContainsString( 'was started under a different Square account or Environment setting, so it cannot be handed to WooCommerce POS.', $html );
+		self::assertCount( 1, $square->requests );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_panels'] );
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
 	}
 
