@@ -234,6 +234,27 @@ final class AjaxHandlerTest extends TestCase {
 		self::assertArrayHasKey( 'sqtwc_reconcile_99', $GLOBALS['sqtwc_options'] );
 	}
 
+	public function test_new_attempt_saves_the_environment_with_its_request(): void {
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['environment'] = 'production';
+		Settings::reset_cache_for_tests();
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+		$adapter                     = new LifecycleAdapter();
+		// No usable answer keeps the attempt, and with it the saved request.
+		$adapter->create_results = array( array() );
+
+		( new AjaxHandler( $adapter ) )->create_terminal_checkout(
+			array(
+				'order_id'  => 99,
+				'device_id' => 'device_a',
+				'order_key' => 'key',
+			)
+		);
+
+		self::assertSame( 'production', $order->get_meta( '_sqtwc_attempt_request' )['environment'] );
+		self::assertSame( 'production', $adapter->create_requests[0]['environment'] );
+	}
+
 	public function test_create_maps_non_retriable_provider_error_without_exposing_detail(): void {
 		$order                       = new \SQTWC_Test_Order( 99 );
 		$GLOBALS['sqtwc_orders'][99] = $order;

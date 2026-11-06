@@ -104,7 +104,11 @@ final class PosCallbackHandler {
 			$this->redirect_to_payment( $order, 'error', 'verification_failed' );
 		}
 
-		if ( $order->is_paid() ) {
+		$paid_on_arrival = $order->is_paid();
+		if ( $paid_on_arrival && self::is_known_transaction( $order, $callback['transaction_id'] ) ) {
+			// The transaction that paid it (or one already reported) returning again: the receipt,
+			// with no call to Square. A different transaction on a paid order is a possible second
+			// charge: it is verified below and, if real, noted under the lock.
 			$this->redirect_to_receipt( $order );
 		}
 
@@ -118,6 +122,12 @@ final class PosCallbackHandler {
 						throw new \RuntimeException( 'WooCommerce order disappeared during verification.' );
 					}
 					if ( $locked_order->is_paid() ) {
+						// Verified, naming this order in its note (the hand-off writes "Order #<number>"), not
+						// another order's, at this location, in this currency: a second charge on this order,
+						// noted once. Anything else is some other order's payment, or no evidence at all.
+						if ( self::names_order( (array) ( $verified['notes'] ?? array() ), $locked_order ) && ! self::belongs_elsewhere( $callback['transaction_id'], $order_id ) && (string) ( $verified['location_id'] ?? '' ) === Settings::get_location_id() && $locked_order->get_currency() === (string) ( $verified['currency'] ?? '' ) ) {
+							self::note_return_on_paid_order( $locked_order, $callback['transaction_id'] );
+						}
 						return 'completed';
 					}
 
@@ -194,6 +204,10 @@ final class PosCallbackHandler {
 					'detail'          => $exception->getMessage(),
 				)
 			);
+			if ( $paid_on_arrival ) {
+				// An order anyone holding its key can name: the failure is logged, never written on the order.
+				$this->redirect_to_receipt( $order );
+			}
 			$order->add_order_note( __( 'Square POS app payment verification failed. Check the Square Dashboard and plugin logs.', 'square-terminal-for-woocommerce' ) );
 			$order->save();
 			$this->redirect_to_payment( $order, 'error', 'verification_failed' );
@@ -219,6 +233,81 @@ final class PosCallbackHandler {
 		}
 
 		return (string) get_option( $option_name, '' ) === (string) $order_id;
+	}
+
+	/**
+	 * A verified Square Point of Sale transaction came back for an order that was paid meanwhile (by
+	 * WCPOS Pro's panel, or another path): the money may have been taken twice, and the order says
+	 * so. Only after verification: the order key alone must not let anyone write a note.
+	 *
+	 * @param object $order          WooCommerce order.
+	 * @param string $transaction_id Square transaction id.
+	 */
+	private static function note_return_on_paid_order( $order, string $transaction_id ): void {
+		if ( self::is_known_transaction( $order, $transaction_id ) ) {
+			return; // The transaction that paid it, or one already noted, returning again.
+		}
+		$reported   = $order->get_meta( '_sqtwc_pos_reported_transaction_ids', true );
+		$reported   = is_array( $reported ) ? $reported : array();
+		$reported[] = $transaction_id;
+		$order->update_meta_data( '_sqtwc_pos_reported_transaction_ids', array_slice( $reported, -20 ) );
+		/* translators: %s: Square transaction id. */
+		$order->add_order_note( sprintf( __( 'Square Point of Sale reported transaction %s for an order that was already paid. Check the Square dashboard for a second charge.', 'square-terminal-for-woocommerce' ), $transaction_id ) );
+		$order->save();
+	}
+
+	/**
+	 * Whether a note written by the hand-off names this order: "Order #<number>" followed by a space
+	 * or the end (the hand-off writes "Order #<number> – <store>"), so #12 never matches #12A or #12-3.
+	 *
+	 * @param string[] $notes Payment notes.
+	 * @param object   $order WooCommerce order.
+	 */
+	private static function names_order( array $notes, $order ): bool {
+		$needle = 'Order #' . $order->get_order_number();
+		foreach ( $notes as $note ) {
+			if ( 1 === preg_match( '/' . preg_quote( $needle, '/' ) . '(?=\s|$)/', (string) $note ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Whether another order already claimed, or records, this transaction.
+	 *
+	 * @param string $transaction_id Square transaction id.
+	 * @param int    $order_id       This order.
+	 */
+	private static function belongs_elsewhere( string $transaction_id, int $order_id ): bool {
+		$claimed = (string) get_option( 'sqtwc_pos_txn_' . md5( $transaction_id ), '' );
+		if ( '' !== $claimed ) {
+			return (int) $claimed !== $order_id;
+		}
+		$others = wc_get_orders(
+			array(
+				'limit'      => 1,
+				'return'     => 'ids',
+				'exclude'    => array( $order_id ),
+				'meta_key'   => '_sqtwc_pos_transaction_id', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- Single-use provider ID requires an order lookup.
+				'meta_value' => $transaction_id, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- Single-use provider ID requires an order lookup.
+			)
+		);
+
+		return ! empty( $others );
+	}
+
+	/**
+	 * Whether this transaction is the one that paid the order, or one already noted as a second charge.
+	 *
+	 * @param object $order          WooCommerce order.
+	 * @param string $transaction_id Square transaction id.
+	 */
+	private static function is_known_transaction( $order, string $transaction_id ): bool {
+		$reported = $order->get_meta( '_sqtwc_pos_reported_transaction_ids', true );
+
+		return '' === $transaction_id || $transaction_id === (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) || in_array( $transaction_id, is_array( $reported ) ? $reported : array(), true );
 	}
 
 	/** Redirect back to the authenticated order-pay page. */

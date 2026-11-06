@@ -29,7 +29,7 @@ final class PosPaymentsClient {
 	public function get( GetPaymentsRequest $request ): GetPaymentResponse {
 		$this->requests[] = $request;
 		$data = $this->payments[ $request->getPaymentId() ];
-		return new GetPaymentResponse( array( 'payment' => new Payment( array( 'id' => $request->getPaymentId(), 'status' => $data['status'], 'totalMoney' => new Money( array( 'amount' => $data['amount'], 'currency' => $data['currency'] ) ) ) ) ) );
+		return new GetPaymentResponse( array( 'payment' => new Payment( array( 'id' => $request->getPaymentId(), 'status' => $data['status'], 'note' => $data['note'] ?? null, 'totalMoney' => new Money( array( 'amount' => $data['amount'], 'currency' => $data['currency'] ) ) ) ) ) );
 	}
 }
 
@@ -38,10 +38,11 @@ final class PosTransactionVerifierTest extends TestCase {
 		$orders = new PosOrdersClient();
 		$orders->tenders = array( new Tender( array( 'type' => 'CARD', 'paymentId' => 'pay_1' ) ) );
 		$payments = new PosPaymentsClient();
-		$payments->payments['pay_1'] = array( 'status' => 'COMPLETED', 'amount' => 1234, 'currency' => 'USD' );
+		$payments->payments['pay_1'] = array( 'status' => 'COMPLETED', 'amount' => 1234, 'currency' => 'USD', 'note' => 'Order #99 – Shop' );
 		$result = ( new PosTransactionVerifier( (object) array( 'orders' => $orders, 'payments' => $payments ) ) )->verify( 'order_1' );
 		self::assertSame( 'order_1', $orders->request->getOrderId() );
 		self::assertSame( array( 'pay_1' ), $result['payment_ids'] );
+		self::assertSame( array( 'Order #99 – Shop', '' ), $result['notes'], 'The payment note and the tender note both tie the payment to the order' );
 		self::assertSame( 1234, $result['amount'] );
 		self::assertSame( 'USD', $result['currency'] );
 		self::assertSame( 'LOC', $result['location_id'] );

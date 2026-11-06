@@ -51,6 +51,8 @@ class Gateway extends \WC_Payment_Gateway {
 		$this->method_title       = __( 'Square Terminal', 'square-terminal-for-woocommerce' );
 		$this->method_description = __( 'Collect in-person payments with Square Terminal.', 'square-terminal-for-woocommerce' );
 		$this->has_fields         = true;
+		// Refunds of a payment WCPOS Pro's ledger holds go through Pro to Square's Refunds API.
+		$this->supports           = array( 'products', 'refunds' );
 
 		$this->init_form_fields();
 		$this->init_settings();
@@ -167,7 +169,7 @@ class Gateway extends \WC_Payment_Gateway {
 	/**
 	 * Register and enqueue the cashier payment assets with localized data.
 	 *
-	 * Enqueued on the order-pay page and checkout, and anywhere a POS context
+	 * Enqueued on the order-pay page, and anywhere a POS context
 	 * opts in via the `sqtwc_enqueue_payment_assets` filter. The localized data
 	 * carries every dynamic string, the AJAX contract, and the device list so
 	 * the JavaScript stays dependency-free and fully translatable.
@@ -201,10 +203,13 @@ class Gateway extends \WC_Payment_Gateway {
 	 * Decide whether the current request should load the cashier assets.
 	 */
 	private function should_enqueue_payment_assets(): bool {
-		// Both branches are load-bearing: 0.2.2 restored the cashier controls on
-		// WCPOS checkouts, which are not always is_checkout_pay_page().
+		if ( Settings::uses_pro_panel() ) {
+			return false; // Pro's panel brings its own script; the old panel is not rendered.
+		}
+		// The order-pay page, and the POS's own checkout route (a POS request that WooCommerce
+		// counts as checkout, not always is_checkout_pay_page()); never the shop's checkout.
 		$should = ( function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() )
-			|| ( function_exists( 'is_checkout' ) && is_checkout() );
+			|| ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() && function_exists( 'is_checkout' ) && is_checkout() );
 
 		/**
 		 * Filter whether the Square Terminal cashier assets should load.
@@ -240,6 +245,8 @@ class Gateway extends \WC_Payment_Gateway {
 			'gatewayId'       => self::ID,
 			'environment'     => $environment,
 			'collectionMethod' => $collection_method,
+			// A live WCPOS Pro payment on the order: the hand-off button stays off whatever the return URL says.
+			'posBlocked'      => $order && 'pos_app' === $collection_method && Legacy_Adoption::pro_has_live_row( $order ) ? __( 'WooCommerce POS is taking a payment on this order. Finish or cancel it there before using the Square POS app.', 'square-terminal-for-woocommerce' ) : '',
 			'devices'         => 'terminal' === $collection_method ? self::get_available_devices( $environment ) : array(),
 			'defaultDeviceId' => (string) Settings::get( 'default_device_id', '' ),
 			'debugLog'        => 'yes' === Settings::get( 'checkout_debug_logs', 'no' ),
@@ -530,22 +537,14 @@ class Gateway extends \WC_Payment_Gateway {
 		// credentials sit in Advanced because connecting removes the need for
 		// them — asking for an access token above the button that makes it
 		// unnecessary is what made the previous layout confusing.
+		// No "enabled" checkbox: the gateway is POS-only (see is_available()), and the switch for
+		// that is in POS → Settings → Checkout. The web checkout the checkbox governed is gone.
 		$this->form_fields = array(
-			'enabled'                  => array(
-				'title'       => __( 'Enable/Disable', 'square-terminal-for-woocommerce' ),
-				'type'        => 'checkbox',
-				// This setting governs the online store only. WooCommerce POS uses
-				// the gateway once it is configured, whether or not it is enabled
-				// here, and a bare "Enable" implied the POS needed it too.
-				'label'       => sprintf(
-					/* translators: %s: link to WCPOS. */
-					__( 'Enable Square Terminal for web checkout (not necessary for %s)', 'square-terminal-for-woocommerce' ),
-					'<a href="https://wcpos.com" target="_blank">WCPOS</a>'
-				),
-				'description' => __( 'WCPOS uses this gateway automatically once configured.', 'square-terminal-for-woocommerce' ),
-				'default'     => 'no',
+			'section_pos'              => array(
+				'title'       => __( 'Where to switch it on', 'square-terminal-for-woocommerce' ),
+				'type'        => 'title',
+				'description' => __( 'For staff on the POS only; never offered on the shop\'s checkout. Switch it on in POS → Settings → Checkout. The Enabled toggle on the Payments list has no effect.', 'square-terminal-for-woocommerce' ),
 			),
-
 			'section_account'          => array(
 				'title'       => __( 'Square account', 'square-terminal-for-woocommerce' ),
 				'type'        => 'title',
@@ -654,6 +653,27 @@ class Gateway extends \WC_Payment_Gateway {
 	}
 
 	/**
+	 * The gateway is POS-only: a Square Terminal is driven by staff, never by a shopper.
+	 *
+	 * Available on a POS request, and on the order-pay page to a user who may run the POS when the
+	 * POS has the gateway switched on; never on the shop's checkout. The WooCommerce → Payments
+	 * checkbox that governed the shop's checkout is gone, and a value a site saved for it before
+	 * the upgrade counts for nothing.
+	 *
+	 * @return bool
+	 */
+	public function is_available() {
+		if ( '' === Settings::get_access_token() || '' === Settings::get_location_id() ) {
+			return false;
+		}
+		if ( function_exists( 'woocommerce_pos_request' ) && woocommerce_pos_request() ) {
+			return true;
+		}
+
+		return function_exists( 'is_checkout_pay_page' ) && is_checkout_pay_page() && current_user_can( 'access_woocommerce_pos' ) && Settings::enabled_for_pos();
+	}
+
+	/**
 	 * Redirect selected unpaid checkout orders to order-pay for Terminal collection.
 	 *
 	 * @param int $order_id WooCommerce order ID.
@@ -672,6 +692,11 @@ class Gateway extends \WC_Payment_Gateway {
 				'result'   => 'success',
 				'redirect' => $this->get_return_url( $order ),
 			);
+		}
+
+		if ( Settings::uses_pro_panel() ) {
+			// Pro's panel drives the leg and reads the ledger; it answers the form submit.
+			return wcpos_pro_order_pay_process( $order );
 		}
 
 		return array(
@@ -693,7 +718,84 @@ class Gateway extends \WC_Payment_Gateway {
 			return;
 		}
 
+		if ( Settings::uses_pro_panel() ) {
+			$order = wc_get_order( $order_id );
+			if ( ! $order ) {
+				return;
+			}
+			// A live checkout the old panel left on this order (the upgrade pass has not reached it)
+			// is Pro's before the panel can offer a second charge. Any refusal leaves that checkout
+			// open and unowned, so no panel: while a till holds the order or a completion is in
+			// flight the page asks for a moment; when Pro refused or threw, the checkout ends on its
+			// own (Square times it out) and the page says so.
+			$adopted = Legacy_Adoption::adopt_order( $order_id );
+			if ( is_wp_error( $adopted ) ) {
+				if ( Legacy_Adoption::is_deferral( $adopted ) ) {
+					$message = __( 'Another request is handling this order. Reload the page in a moment.', 'square-terminal-for-woocommerce' );
+				} elseif ( 'sqtwc_adoption_stale_attempt' === $adopted->get_error_code() ) {
+					// Too old to adopt, and its outcome unknown until the old sweep reads it from Square.
+					$message = __( 'An earlier Square Terminal payment on this order has not been confirmed yet. It is being checked; reload the page in a few minutes, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+				} elseif ( 'sqtwc_adoption_unconfirmed_create' === $adopted->get_error_code() ) {
+					$message = __( 'Square never confirmed an earlier Terminal payment on this order, and it may still be open. Check the Terminal and the Square dashboard. A new payment can start here one hour after that attempt began.', 'square-terminal-for-woocommerce' );
+				} elseif ( 'sqtwc_adoption_other_environment' === $adopted->get_error_code() ) {
+					$message = __( 'An earlier Square Terminal payment on this order was started under a different Square account or Environment setting, so it cannot be handed to WooCommerce POS. Check it in the Square dashboard, or switch the setting back, before taking this payment again.', 'square-terminal-for-woocommerce' );
+				} else {
+					$message = __( 'A Square Terminal payment is still open on this order and could not be handed to WooCommerce POS. Square cancels an unpaid checkout within five minutes and this plugin clears it within about twenty; reload the page then, or check it in the Square dashboard.', 'square-terminal-for-woocommerce' );
+				}
+				echo '<p class="sqtwc-payment__help">' . esc_html( $message ) . '</p>';
+
+				return;
+			}
+			wcpos_pro_order_pay_panel( $this, $order );
+
+			return;
+		}
+
 		echo self::render_payment_ui( $order_id, array() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- HTML is escaped in render method.
+	}
+
+	/**
+	 * Refund through WCPOS Pro when its ledger holds the payment.
+	 *
+	 * A leg Pro drove (server or device, authorized or captured) refunds through Pro to Square's
+	 * Refunds API. A payment the old panel completed is not in Pro's ledger as a refundable row
+	 * (Free mints a `webview` row Pro cannot refund), and this plugin never refunded from
+	 * WooCommerce: as before, it is refunded from the Square dashboard.
+	 *
+	 * @param int        $order_id Order id.
+	 * @param float|null $amount   Refund amount.
+	 * @param string     $reason   Refund reason.
+	 * @return bool|\WP_Error
+	 */
+	public function process_refund( $order_id, $amount = null, $reason = '' ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return new \WP_Error( 'sqtwc_invalid_order', __( 'Invalid order.', 'square-terminal-for-woocommerce' ) );
+		}
+		if ( self::has_counting_row( $order ) ) {
+			return wcpos_pro_order_pay_refund( $order, $amount, (string) $reason );
+		}
+
+		return new \WP_Error( 'sqtwc_refund_in_square', __( 'This Square payment was taken by the plugin\'s own order-pay panel; refund it from the Square dashboard.', 'square-terminal-for-woocommerce' ) );
+	}
+
+	/**
+	 * Whether Pro's ledger holds a counting (authorized or captured) server or device row for
+	 * this gateway: a leg Pro drove and can refund.
+	 *
+	 * @param \WC_Order $order Order.
+	 */
+	private static function has_counting_row( $order ): bool {
+		if ( ! class_exists( '\WCPOS\WooCommercePOS\Payments\Contract\Ledger' ) ) {
+			return false;
+		}
+		foreach ( \WCPOS\WooCommercePOS\Payments\Contract\Ledger::instance()->read( $order ) as $row ) {
+			if ( self::ID === ( $row['method_id'] ?? null ) && in_array( $row['status'] ?? '', \WCPOS\WooCommercePOS\Payments\Contract\Ledger::COUNTING_STATUSES, true ) && in_array( $row['capture_mode'] ?? '', array( 'server', 'device' ), true ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -862,6 +964,10 @@ class Gateway extends \WC_Payment_Gateway {
 		}
 		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
 			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
+		}
+		if ( $order && Legacy_Adoption::pro_has_live_row( $order ) ) {
+			// The collection method changed under a live WCPOS Pro payment: no second charge from the app.
+			return __( 'WooCommerce POS is taking a payment on this order. Finish or cancel it there before using the Square POS app.', 'square-terminal-for-woocommerce' );
 		}
 
 		return '';
@@ -1071,7 +1177,7 @@ class Gateway extends \WC_Payment_Gateway {
 			. '<p class="description">%7$s</p>',
 			esc_attr( $state ),
 			esc_html( $message ),
-			esc_attr( Settings::get_webhook_notification_url() ),
+			esc_attr( Settings::get_displayed_webhook_url() ),
 			esc_attr__( 'Copied', 'square-terminal-for-woocommerce' ),
 			esc_attr__( 'Press Ctrl+C', 'square-terminal-for-woocommerce' ),
 			esc_html__( 'Copy', 'square-terminal-for-woocommerce' ),

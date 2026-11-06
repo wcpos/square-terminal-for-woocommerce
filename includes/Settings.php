@@ -21,10 +21,18 @@ final class Settings {
 	private static ?array $settings = null;
 
 	/**
+	 * Whether the POS has the gateway switched on, for the current request.
+	 *
+	 * @var bool|null
+	 */
+	private static ?bool $enabled_for_pos = null;
+
+	/**
 	 * Reset the memoized settings after gateway options change.
 	 */
 	public static function reset_cache(): void {
-		self::$settings = null;
+		self::$settings        = null;
+		self::$enabled_for_pos = null;
 	}
 
 	/**
@@ -76,7 +84,20 @@ final class Settings {
 	 * as before for sites that have not connected.
 	 */
 	public static function get_access_token(): string {
-		$environment = self::get_environment();
+		return self::get_access_token_for( self::get_environment() );
+	}
+
+	/**
+	 * Return the access token for one Square environment, whatever the current setting is.
+	 *
+	 * A checkout made in the sandbox is polled, cancelled and refunded with the sandbox token even
+	 * after the merchant switches the gateway to production: the action's reference carries its
+	 * environment, and this is how the server adapter honours it.
+	 *
+	 * @param string $environment Square environment.
+	 */
+	public static function get_access_token_for( string $environment ): string {
+		$environment = 'production' === $environment ? 'production' : 'sandbox';
 		$connection  = SquareOAuth::connection();
 
 		if (
@@ -94,6 +115,23 @@ final class Settings {
 	}
 
 	/**
+	 * Whether the POS has the gateway switched on (POS → Settings → Checkout): the only switch.
+	 */
+	public static function enabled_for_pos(): bool {
+		// Memoized per request: Free's reader rebuilds WooCommerce's gateway list on every read, and
+		// WooCommerce asks is_available() of every gateway on the pay page.
+		if ( null === self::$enabled_for_pos ) {
+			// wcpos_get_settings() is the maintained helper; woocommerce_pos_get_settings() is its deprecated alias.
+			$getter   = function_exists( 'wcpos_get_settings' ) ? 'wcpos_get_settings' : 'woocommerce_pos_get_settings';
+			$settings = function_exists( $getter ) ? $getter( 'payment_gateways' ) : array();
+
+			self::$enabled_for_pos = is_array( $settings ) && ! empty( $settings['gateways'][ Gateway::ID ]['enabled'] );
+		}
+
+		return self::$enabled_for_pos;
+	}
+
+	/**
 	 * Return Square Location ID.
 	 */
 	public static function get_location_id(): string {
@@ -105,6 +143,25 @@ final class Settings {
 	 */
 	public static function get_collection_method(): string {
 		return 'pos_app' === self::get( 'collection_method', 'terminal' ) ? 'pos_app' : 'terminal';
+	}
+
+	/**
+	 * Whether the POS order-pay page runs through WCPOS Pro's shared panel.
+	 *
+	 * Square POS app carve-out (roadmap#95): with the collection method set to the Square Point
+	 * of Sale app hand-off, the merchant keeps this plugin's own order-pay panel, because the
+	 * app hand-off has no home in Pro's panel yet. With a paired Terminal, the shared panel takes
+	 * the page and the payment becomes a ledger row, like a keypad payment.
+	 */
+	public static function uses_pro_panel(): bool {
+		$uses = 'pos_app' !== self::get_collection_method() && function_exists( 'wcpos_pro_order_pay_panel' );
+
+		/**
+		 * Filter whether the POS order-pay page runs through WCPOS Pro's shared panel.
+		 *
+		 * @param bool $uses True for Pro's panel, false for this plugin's own.
+		 */
+		return (bool) apply_filters( 'sqtwc_uses_pro_panel', $uses );
 	}
 
 	/**
@@ -161,6 +218,25 @@ final class Settings {
 		// notification URL. The stored value remains an override for sites whose
 		// public URL differs from what WordPress derives.
 		return '' !== $configured ? $configured : self::get_default_webhook_url();
+	}
+
+	/**
+	 * Return the notification URL Square must sign for the WCPOS Pro payments base.
+	 *
+	 * Pro's shared webhook route, with the provider family as its query argument. Square signs
+	 * over the registered notification URL, so the subscription must name exactly this URL.
+	 */
+	public static function get_pro_webhook_url(): string {
+		return function_exists( 'rest_url' ) ? (string) add_query_arg( 'provider', 'square', rest_url( 'wcpos/v2/payments/webhook' ) ) : '';
+	}
+
+	/**
+	 * The URL the settings screen shows and judges webhook health by. Under Pro's panel it is the URL
+	 * Square_Server_Provider signs over, and the override serves the old panel only: a site whose
+	 * public URL differs from rest_url() fails signature on Pro's route and settles by polling.
+	 */
+	public static function get_displayed_webhook_url(): string {
+		return self::uses_pro_panel() ? self::get_pro_webhook_url() : self::get_webhook_notification_url();
 	}
 
 	/**

@@ -8,7 +8,9 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 
 use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
+use WCPOS\WooCommercePOS\SquareTerminal\Settings;
 
 /**
  * Rechecks stale active and detached Terminal checkouts in bounded batches.
@@ -22,6 +24,10 @@ final class PaymentSweeper {
 	private const POSTS_STORE_QUERY_FILTER = 'woocommerce_order_data_store_cpt_get_orders_query';
 	/** Filter listing the wc_get_orders() args the posts order store warns about (WooCommerce 9.2+). */
 	private const POSTS_STORE_UNSUPPORTED_ARGS_FILTER = 'woocommerce_order_data_store_cpt_query_unsupported_args';
+	/** Age before the sweep reads an attempt: the checkout's five-minute deadline plus margin. */
+	private const ATTEMPT_SETTLE_SECONDS = 600;
+	/** How far before an attempt's start its search reaches: clock difference between this server and Square. */
+	private const CLOCK_SKEW_SECONDS = 300;
 
 	/** @var object|null */
 	private $terminal_adapter;
@@ -275,10 +281,12 @@ final class PaymentSweeper {
 			return;
 		}
 
+		$this->recover_unconfirmed_create( $order );
+
 		$checkout_ids = array();
 		$current_id   = (string) $order->get_meta( '_sqtwc_checkout_id', true );
 		$started      = (int) $order->get_meta( '_sqtwc_attempt_started', true );
-		if ( '' !== $current_id && $started > 0 && $started < ( time() - 600 ) ) {
+		if ( '' !== $current_id && $started > 0 && $started < ( time() - self::ATTEMPT_SETTLE_SECONDS ) ) {
 			$checkout_ids[ $current_id ] = false;
 		}
 
@@ -313,6 +321,72 @@ final class PaymentSweeper {
 		} else {
 			OrderMeta::unindex_order( $order_id );
 		}
+	}
+
+	/**
+	 * Find the checkout of an attempt whose create Square never confirmed (this sweep then reconciles it), or close the
+	 * attempt. Never replays the create: unattended, it could start a checkout on a reader with nobody there.
+	 *
+	 * @param object $order Locked WooCommerce order.
+	 */
+	private function recover_unconfirmed_create( $order ): void {
+		$started = (int) $order->get_meta( '_sqtwc_attempt_started', true );
+		$request = $order->get_meta( '_sqtwc_attempt_request', true );
+		$env     = is_array( $request ) ? ( $request['environment'] ?? null ) : null;
+		// An attempt saved in the other environment would be searched in the wrong Square account,
+		// where an empty answer proves nothing: it is left exactly as it is.
+		if ( ! Legacy_Adoption::has_unconfirmed_create( $order ) || $started <= 0 || $started >= time() - self::ATTEMPT_SETTLE_SECONDS || ! is_array( $request )
+			|| empty( $request['device_id'] ) || ! isset( $request['amount'], $request['currency'] ) || ( null !== $env && Settings::get_environment() !== $env ) ) {
+			return;
+		}
+
+		$order_id = (int) $order->get_id();
+		$want     = array( 'woocommerce_order_' . $order_id, (string) $request['device_id'], (int) $request['amount'], (string) $request['currency'] );
+		try {
+			$rows = $this->terminal_adapter()->search_checkouts( $want[1], gmdate( 'Y-m-d\TH:i:s\Z', $started - self::CLOCK_SKEW_SECONDS ) );
+		} catch ( Throwable $exception ) {
+			$this->log_error( $order_id, '', $exception );
+
+			return;
+		}
+
+		// This order's earlier checkouts fall inside the clock margin and say nothing about this attempt.
+		$history = $order->get_meta( '_sqtwc_attempt_history', true );
+		$earlier = $order->get_meta( '_sqtwc_abandoned_checkout_ids', true );
+		$earlier = array_map( 'strval', array_merge( is_array( $earlier ) ? $earlier : array(), array_column( is_array( $history ) ? $history : array(), 'checkout_id' ) ) );
+		$matches = array();
+		foreach ( $rows as $row ) {
+			$id = (string) ( $row['id'] ?? '' );
+			if ( '' !== $id && ! in_array( $id, $earlier, true ) && array( $row['reference_id'] ?? null, $row['device_id'] ?? null, $row['amount'] ?? null, $row['currency'] ?? null ) === $want ) {
+				$matches[] = $row;
+			}
+		}
+
+		if ( count( $matches ) > 1 ) {
+			// The idempotency key allows one checkout per attempt, so which one is ours is not the sweep's to guess.
+			Logger::error( 'Square Terminal sweep found several checkouts for one attempt: ' . implode( ', ', array_column( $matches, 'id' ) ), array( 'order_id' => $order_id ) );
+
+			return;
+		}
+		if ( $matches ) {
+			$order->update_meta_data( '_sqtwc_checkout_id', (string) $matches[0]['id'] );
+			$order->update_meta_data( '_sqtwc_checkout_status', (string) ( $matches[0]['status'] ?? 'PENDING' ) );
+			OrderMeta::append_log( $order, 'info', __( 'Square found the Terminal checkout it had not confirmed.', 'square-terminal-for-woocommerce' ) );
+			$order->save();
+
+			return;
+		}
+		// With no saved environment an empty answer may be the other account's: the hold runs its hour first.
+		if ( null === $env && $started >= time() - Legacy_Adoption::ADOPTION_WINDOW ) {
+			return;
+		}
+		if ( ! $order->is_paid() ) {
+			$note = __( 'Square shows no checkout for an earlier Terminal attempt on this order, so that attempt was closed and a new payment can start. If the customer says they paid, check the Square dashboard first.', 'square-terminal-for-woocommerce' );
+			$order->add_order_note( $note );
+			OrderMeta::append_log( $order, 'warning', $note );
+		}
+		OrderMeta::close_current_attempt( $order, 'NOT_FOUND' );
+		$order->save();
 	}
 
 	/**

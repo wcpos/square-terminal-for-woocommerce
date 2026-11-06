@@ -53,9 +53,14 @@ final class WebhookHandler {
 	 *
 	 * Only verified deliveries are recorded, because this route is public: an
 	 * unauthenticated caller must not be able to write the health state that the
-	 * settings screen reports.
+	 * settings screen reports, and only one signed over the URL the screen shows.
+	 *
+	 * @param string $signed_url The notification URL the signature was verified over.
 	 */
-	private static function record_verified_delivery(): void {
+	public static function record_verified_delivery( string $signed_url ): void {
+		if ( Settings::get_displayed_webhook_url() !== $signed_url ) {
+			return;
+		}
 		update_option(
 			self::LAST_DELIVERY_OPTION,
 			array(
@@ -80,7 +85,7 @@ final class WebhookHandler {
 				'|',
 				array(
 					Settings::get_environment(),
-					Settings::get_webhook_notification_url(),
+					Settings::get_displayed_webhook_url(),
 					Settings::get_webhook_signature_key(),
 				)
 			)
@@ -131,7 +136,7 @@ final class WebhookHandler {
 		// could otherwise post a bad signature and make the settings screen claim
 		// webhooks are broken when they are not. A key mismatch still shows,
 		// as the absence of any verified delivery.
-		self::record_verified_delivery();
+		self::record_verified_delivery( Settings::get_webhook_notification_url() );
 
 		$event = json_decode( $body, true );
 		if ( ! is_array( $event ) ) {
@@ -151,9 +156,11 @@ final class WebhookHandler {
 		$checkout  = $event['data']['object']['checkout'] ?? null;
 		$reference = is_array( $checkout ) ? (string) ( $checkout['reference_id'] ?? '' ) : '';
 		if ( ! preg_match( '/^woocommerce_order_(\d+)$/', $reference, $matches ) ) {
+			// A checkout WCPOS Pro created carries its ledger row id here and is delivered to Pro's
+			// own route; this route acknowledges it so Square does not retry.
 			return array(
-				'status' => 400,
-				'error'  => __( 'Invalid reference_id.', 'square-terminal-for-woocommerce' ),
+				'status' => 202,
+				'result' => 'ignored',
 			);
 		}
 
