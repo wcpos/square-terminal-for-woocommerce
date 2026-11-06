@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Refund_Reask;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Square_Server_Provider;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
@@ -155,9 +156,49 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( $this->square->body( 0 ), $this->square->body( 1 ) );
 		$this->assertTrue( $this->square->body( 1 )['checkout']['device_options']['collect_signature'] );
 		$this->assertSame(
-			array( 'skip_receipt_screen' => false, 'collect_signature' => true ),
+			array( 'skip_receipt_screen' => false, 'collect_signature' => true, 'environment' => 'sandbox' ),
 			$GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ]
 		);
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 ) );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout'] );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout']['device_options'] );
+	}
+
+	public function test_a_replay_after_an_environment_switch_goes_to_the_environment_of_the_first_post(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::lost();
+		$this->assertInstanceOf( \WP_Error::class, $this->adapter()->create_reader_action( $this->row(), 'DEV1' ) );
+		$this->set( array( 'environment' => 'sandbox' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		// The first checkout exists only in production; the replay must reach it there under the same key.
+		$this->assertSame( 'production:TC1', $result['ref'] );
+		foreach ( array( 0, 1 ) as $i ) {
+			$this->assertSame( 'connect.squareup.com', $this->square->requests[ $i ]->getUri()->getHost() );
+			$this->assertSame( 'Bearer prod-token', $this->square->requests[ $i ]->getHeaderLine( 'Authorization' ) );
+		}
+		$this->assertSame( (string) $this->square->requests[0]->getBody(), (string) $this->square->requests[1]->getBody() );
+	}
+
+	public function test_an_entry_saved_before_the_environment_was_kept_follows_the_setting_and_is_not_rewritten(): void {
+		$entry = array( 'skip_receipt_screen' => false, 'collect_signature' => true );
+		$GLOBALS['sqtwc_orders'][99]->update_meta_data( Square_Server_Provider::DEVICE_OPTIONS_META, array( self::ROW => $entry ) );
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$this->assertSame( 'production:TC1', $this->adapter()->create_reader_action( $this->row(), 'DEV1' )['ref'] );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( $entry, $GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ] );
+	}
+
+	public function test_a_create_answered_without_a_checkout_is_unanswered_like_a_transport_loss(): void {
+		$this->square->queue[] = self::lost();
+		$lost = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->square->queue[] = self::json( 200, array() );
+		$empty = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertInstanceOf( \WP_Error::class, $empty );
+		$this->assertSame( $lost->get_error_code(), $empty->get_error_code() );
+		$this->assertTrue( $empty->get_error_data()['indeterminate'] );
+		$this->assertSame( $lost->get_error_data()['status'] ?? null, $empty->get_error_data()['status'] ?? null );
 	}
 
 	/** @dataProvider unanswered_creates */
@@ -587,5 +628,43 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( 'pending', $pending['status'] );
 		$this->assertCount( 3, array_unique( array( $expired['event_id'], $voided['event_id'], $pending['event_id'] ) ) );
 		$this->assertArrayNotHasKey( 'failure_reason', $expired );
+	}
+
+	public function test_sandbox_lists_squares_test_devices_without_asking_square(): void {
+		Gateway::reset_device_memo();
+		$expected = array_map(
+			static fn ( array $device ): array => array( 'id' => $device['id'], 'label' => $device['label'], 'status' => 'online' ),
+			Gateway::get_available_devices( 'sandbox' )
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertCount( 5, $readers );
+		$this->assertSame( $expected, $readers );
+		$this->assertSame( array( '9fa747a2-25ff-48ee-b078-04381f7c828f', '22cd266c-6246-4c06-9983-67f0c26346b0', '841100b9-ee60-4537-9bcf-e30b2ba5e215', '0a956d49-619a-4530-8e5e-8eac603ffc5e', 'da40d603-c2ea-4a65-8cfd-f42e36dab0c7' ), array_column( $readers, 'id' ) );
+		$this->assertCount( 0, $this->square->requests );
+		Gateway::reset_device_memo();
+	}
+
+	public function test_production_lists_the_paired_devices_square_returns(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::json(
+			200,
+			array(
+				'device_codes' => array(
+					array( 'id' => 'DC1', 'name' => 'Front counter', 'device_id' => 'DEV_FRONT', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+					array( 'id' => 'DC2', 'name' => 'Back counter', 'device_id' => 'DEV_BACK', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+				),
+			)
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertSame(
+			array(
+				array( 'id' => 'DEV_FRONT', 'label' => 'Front counter', 'status' => 'online' ),
+				array( 'id' => 'DEV_BACK', 'label' => 'Back counter', 'status' => 'online' ),
+			),
+			$readers
+		);
+		$this->assertCount( 1, $this->square->requests );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( '/v2/devices/codes', $this->square->requests[0]->getUri()->getPath() );
 	}
 }
