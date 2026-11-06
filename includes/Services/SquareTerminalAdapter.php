@@ -16,6 +16,7 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Payment;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\PaymentOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckout;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Payments\Requests\GetPaymentsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\GetRefundsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\RefundPaymentRequest;
 
 /**
@@ -144,7 +145,24 @@ final class SquareTerminalAdapter {
 			)
 		);
 		$response = $this->client->refunds->refundPayment( $request, $options );
-		$refund   = $response->getRefund();
+
+		return $this->normalize_refund( $response->getRefund() );
+	}
+
+	/**
+	 * Retrieve and normalize a Square refund.
+	 *
+	 * @param string              $refund_id Square refund ID.
+	 * @param array<string,mixed> $options   SDK request options.
+	 */
+	public function get_refund( string $refund_id, array $options = array() ): array {
+		$response = $this->client->refunds->get( new GetRefundsRequest( array( 'refundId' => $refund_id ) ), $options );
+
+		return $this->normalize_refund( $response->getRefund() );
+	}
+
+	/** Normalize a Square PaymentRefund, or throw when there is none (untyped: tests alias the SDK lazily). */
+	private function normalize_refund( $refund ): array {
 		if ( ! $refund || '' === (string) $refund->getId() ) {
 			// A success with no refund in it says nothing: the caller treats it as unanswered.
 			throw new \UnexpectedValueException( 'Square answered the refund without a refund object.' );
