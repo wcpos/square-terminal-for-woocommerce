@@ -75,7 +75,7 @@ Facts the adapter rests on, and what they mean for the store:
 
 ### Conformance suite
 
-Pro's provider conformance suite (`tests/conformance/`) runs the real adapter over a scripted Square (a PSR-18 client behind the `sqtwc_square_http_client` filter) under wp-env with the sibling Pro checkout, and compares the recorded transcripts in `tests/conformance/transcripts/`. It needs Docker, a sibling checkout at `../woocommerce-pos-pro` on `next` with its Composer dependencies installed, and this plugin installed **without** dev packages (its PHPUnit 10 cannot share a process with Pro's PHPUnit 9):
+Pro's provider conformance suite (`tests/conformance/`) runs the real adapter over a scripted Square (a PSR-18 client behind the `sqtwc_square_http_client` filter) under wp-env with the sibling Pro checkout, and compares the recorded transcripts in `tests/conformance/transcripts/`. It needs Docker, a sibling checkout at `../woocommerce-pos-pro` on `main` with its Composer dependencies installed, and this plugin installed **without** dev packages (its PHPUnit 10 cannot share a process with Pro's PHPUnit 9):
 
 ```bash
 composer install --no-dev
