@@ -41,6 +41,23 @@ final class Recording_Square_Provider extends Square_Server_Provider {
 		return $result;
 	}
 
+	/**
+	 * {@inheritDoc}
+	 *
+	 * Sandbox lists Square's fixed test devices, but the fake Square knows only its two paired
+	 * devices, so the suite reads them through the real paired lookup: production for the call,
+	 * then the environment back. The fake accepts the production token, and the ids match.
+	 */
+	public function list_readers() {
+		$environment = Settings::get_environment();
+		self::$fixture->environment( 'production' );
+		try {
+			return parent::list_readers();
+		} finally {
+			self::$fixture->environment( $environment );
+		}
+	}
+
 	/** {@inheritDoc} */
 	public function fetch( string $ref ) {
 		list( $environment, $checkout_id ) = self::parse_ref( $ref );

@@ -11,6 +11,11 @@ The stable release of 1.0.0-beta1, for WCPOS 2.0, with the fixes below. The rest
 - Under WCPOS Pro's panel, the settings screen showed the old webhook URL, and "Verified" counted deliveries Pro never sees. It now shows Pro's URL and counts only deliveries signed for it. After upgrading, change your Square webhook subscription to the URL the settings screen shows, and save that subscription's signature key here.
 - Checkouts started from WCPOS Pro's panel ignored "Skip receipt screen" and "Collect signature". They now follow both settings.
 - A refund Square answered as pending was never checked again, so a later rejection went unnoticed. WCPOS Pro's refund sweep now reads it until Square completes or rejects it, and the order note no longer calls it confirmed.
+- An order whose Square checkout was never confirmed before the upgrade could be charged again from WCPOS Pro's panel. The panel now waits an hour from that attempt, then opens with an order note telling staff to check the Square dashboard.
+- When Square did not answer a checkout started from WCPOS Pro's panel and Environment was switched before it was asked again, the plugin asked the other Square account, so a checkout the customer could still pay was never found. It now asks again in the environment the checkout was started in.
+- In sandbox, WCPOS Pro's panel listed no readers, because Square's sandbox has no paired devices. It now lists Square's five sandbox test devices, as the old panel did.
+- A payment started from the POS could put a second checkout on a Terminal while one the old payment page started was still open or never confirmed by Square. The POS now refuses that payment and tells staff what to check first.
+- When Square's answer to a new Terminal checkout was lost, the order stayed held with no way to learn whether the checkout existed. The background check now asks Square for that checkout and records it, or closes the attempt with an order note when Square has none.
 
 ## [1.0.0-beta1] - 2026-11-02
 

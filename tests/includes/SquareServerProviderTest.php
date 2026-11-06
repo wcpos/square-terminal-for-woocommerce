@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Refund_Reask;
 use WCPOS\WooCommercePOS\SquareTerminal\Server\Square_Server_Provider;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
@@ -61,7 +62,7 @@ final class SquareServerProviderTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'], $GLOBALS['sqtwc_orders'], $GLOBALS['sqtwc_adopted'] );
+		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_square_http_client'], $GLOBALS['sqtwc_orders'], $GLOBALS['sqtwc_adopted'], $GLOBALS['sqtwc_ledger_rows'], $GLOBALS['sqtwc_wc_get_order_callback'], $GLOBALS['sqtwc_clean_post_cache_callback'], $GLOBALS['sqtwc_cleaned_post_caches'] );
 		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
 		Settings::reset_cache_for_tests();
 	}
@@ -155,9 +156,49 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( $this->square->body( 0 ), $this->square->body( 1 ) );
 		$this->assertTrue( $this->square->body( 1 )['checkout']['device_options']['collect_signature'] );
 		$this->assertSame(
-			array( 'skip_receipt_screen' => false, 'collect_signature' => true ),
+			array( 'skip_receipt_screen' => false, 'collect_signature' => true, 'environment' => 'sandbox' ),
 			$GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ]
 		);
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 ) );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout'] );
+		$this->assertArrayNotHasKey( 'environment', $this->square->body( 0 )['checkout']['device_options'] );
+	}
+
+	public function test_a_replay_after_an_environment_switch_goes_to_the_environment_of_the_first_post(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::lost();
+		$this->assertInstanceOf( \WP_Error::class, $this->adapter()->create_reader_action( $this->row(), 'DEV1' ) );
+		$this->set( array( 'environment' => 'sandbox' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		// The first checkout exists only in production; the replay must reach it there under the same key.
+		$this->assertSame( 'production:TC1', $result['ref'] );
+		foreach ( array( 0, 1 ) as $i ) {
+			$this->assertSame( 'connect.squareup.com', $this->square->requests[ $i ]->getUri()->getHost() );
+			$this->assertSame( 'Bearer prod-token', $this->square->requests[ $i ]->getHeaderLine( 'Authorization' ) );
+		}
+		$this->assertSame( (string) $this->square->requests[0]->getBody(), (string) $this->square->requests[1]->getBody() );
+	}
+
+	public function test_an_entry_saved_before_the_environment_was_kept_follows_the_setting_and_is_not_rewritten(): void {
+		$entry = array( 'skip_receipt_screen' => false, 'collect_signature' => true );
+		$GLOBALS['sqtwc_orders'][99]->update_meta_data( Square_Server_Provider::DEVICE_OPTIONS_META, array( self::ROW => $entry ) );
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$this->assertSame( 'production:TC1', $this->adapter()->create_reader_action( $this->row(), 'DEV1' )['ref'] );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( $entry, $GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META )[ self::ROW ] );
+	}
+
+	public function test_a_create_answered_without_a_checkout_is_unanswered_like_a_transport_loss(): void {
+		$this->square->queue[] = self::lost();
+		$lost = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->square->queue[] = self::json( 200, array() );
+		$empty = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertInstanceOf( \WP_Error::class, $empty );
+		$this->assertSame( $lost->get_error_code(), $empty->get_error_code() );
+		$this->assertTrue( $empty->get_error_data()['indeterminate'] );
+		$this->assertSame( $lost->get_error_data()['status'] ?? null, $empty->get_error_data()['status'] ?? null );
 	}
 
 	/** @dataProvider unanswered_creates */
@@ -587,5 +628,154 @@ final class SquareServerProviderTest extends TestCase {
 		$this->assertSame( 'pending', $pending['status'] );
 		$this->assertCount( 3, array_unique( array( $expired['event_id'], $voided['event_id'], $pending['event_id'] ) ) );
 		$this->assertArrayNotHasKey( 'failure_reason', $expired );
+	}
+
+	public function test_sandbox_lists_squares_test_devices_without_asking_square(): void {
+		Gateway::reset_device_memo();
+		$expected = array_map(
+			static fn ( array $device ): array => array( 'id' => $device['id'], 'label' => $device['label'], 'status' => 'online' ),
+			Gateway::get_available_devices( 'sandbox' )
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertCount( 5, $readers );
+		$this->assertSame( $expected, $readers );
+		$this->assertSame( array( '9fa747a2-25ff-48ee-b078-04381f7c828f', '22cd266c-6246-4c06-9983-67f0c26346b0', '841100b9-ee60-4537-9bcf-e30b2ba5e215', '0a956d49-619a-4530-8e5e-8eac603ffc5e', 'da40d603-c2ea-4a65-8cfd-f42e36dab0c7' ), array_column( $readers, 'id' ) );
+		$this->assertCount( 0, $this->square->requests );
+		Gateway::reset_device_memo();
+	}
+
+	public function test_production_lists_the_paired_devices_square_returns(): void {
+		$this->set( array( 'environment' => 'production' ) );
+		$this->square->queue[] = self::json(
+			200,
+			array(
+				'device_codes' => array(
+					array( 'id' => 'DC1', 'name' => 'Front counter', 'device_id' => 'DEV_FRONT', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+					array( 'id' => 'DC2', 'name' => 'Back counter', 'device_id' => 'DEV_BACK', 'product_type' => 'TERMINAL_API', 'location_id' => 'LOC1', 'status' => 'PAIRED' ),
+				),
+			)
+		);
+		$readers = $this->adapter()->list_readers();
+		$this->assertSame(
+			array(
+				array( 'id' => 'DEV_FRONT', 'label' => 'Front counter', 'status' => 'online' ),
+				array( 'id' => 'DEV_BACK', 'label' => 'Back counter', 'status' => 'online' ),
+			),
+			$readers
+		);
+		$this->assertCount( 1, $this->square->requests );
+		$this->assertSame( 'connect.squareup.com', $this->square->requests[0]->getUri()->getHost() );
+		$this->assertSame( '/v2/devices/codes', $this->square->requests[0]->getUri()->getPath() );
+	}
+
+	private const UNCONFIRMED = 'Square never confirmed an earlier Terminal payment for this sale, and it may still be open. Check the Terminal and the Square dashboard. A new payment can start one hour after that attempt began.';
+	private const STALE       = 'An earlier Square Terminal payment for this sale has not been confirmed yet. It is being checked. Try again in a few minutes, or check it in the Square dashboard.';
+	private const OPEN        = 'An earlier Square Terminal payment for this sale is still open on the payment page. Finish or cancel it there first.';
+
+	/** The old panel's create Square never answered, started `$age` seconds ago. */
+	private function unconfirmed_create( int $age ): \SQTWC_Test_Order {
+		$order = $GLOBALS['sqtwc_orders'][99];
+		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
+		$order->meta['_sqtwc_checkout_status']    = 'PENDING';
+		$order->meta['_sqtwc_attempt_started']    = time() - $age;
+		return $order;
+	}
+
+	/** The old panel's live checkout TC9, started `$age` seconds ago. */
+	private function legacy_checkout( int $age ): \SQTWC_Test_Order {
+		$order = $GLOBALS['sqtwc_orders'][99];
+		$order->meta['_sqtwc_current_attempt_id'] = 'att-1';
+		$order->meta['_sqtwc_checkout_id']        = 'TC9';
+		$order->meta['_sqtwc_checkout_status']    = 'IN_PROGRESS';
+		$order->meta['_sqtwc_attempt_started']    = time() - $age;
+		return $order;
+	}
+
+	private function assert_refused( string $message ): void {
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'sqtwc_legacy_attempt_held', $result->get_error_code() );
+		$this->assertSame( 409, $result->get_error_data()['status'] );
+		$this->assertSame( $message, $result->get_error_message() );
+		$this->assertCount( 0, $this->square->requests, 'Nothing reaches Square' );
+		$this->assertSame( '', $GLOBALS['sqtwc_orders'][99]->get_meta( Square_Server_Provider::DEVICE_OPTIONS_META ), 'No snapshot is saved' );
+	}
+
+	private function assert_created(): void {
+		$this->square->queue[] = self::checkout( 'PENDING' );
+		$result = $this->adapter()->create_reader_action( $this->row(), 'DEV1' );
+		$this->assertIsArray( $result );
+		$this->assertSame( 'sandbox:TC1', $result['ref'] );
+		$this->assertCount( 1, $this->square->requests );
+	}
+
+	public function test_a_tile_start_beside_an_unconfirmed_create_inside_the_window_is_refused(): void {
+		$this->unconfirmed_create( 60 );
+		$this->assert_refused( self::UNCONFIRMED );
+	}
+
+	public function test_the_row_being_started_does_not_lift_the_unconfirmed_hold(): void {
+		// At a tile start the row being created is itself a live ledger row for this gateway.
+		$this->unconfirmed_create( 60 );
+		$GLOBALS['sqtwc_ledger_rows'][99] = array( array( 'id' => self::ROW, 'method_id' => Gateway::ID, 'status' => 'pending' ) );
+		$this->assert_refused( self::UNCONFIRMED );
+	}
+
+	public function test_a_tile_start_beside_a_stale_live_pointer_is_refused(): void {
+		$this->legacy_checkout( HOUR_IN_SECONDS + 60 );
+		$this->assert_refused( self::STALE );
+	}
+
+	public function test_a_tile_start_beside_a_live_checkout_nothing_adopted_is_refused(): void {
+		$this->legacy_checkout( 60 );
+		$this->assert_refused( self::OPEN );
+	}
+
+	public function test_a_tile_start_after_the_unconfirmed_window_goes_out(): void {
+		$this->unconfirmed_create( HOUR_IN_SECONDS + 60 );
+		$this->assert_created();
+	}
+
+	public function test_a_tile_start_beside_an_adopted_checkout_goes_out_whatever_its_row_status(): void {
+		foreach ( array( 'pending', 'voided' ) as $status ) {
+			$this->setUp();
+			$this->legacy_checkout( 60 );
+			$GLOBALS['sqtwc_adopted']['sandbox:TC9'] = 'row-old';
+			$GLOBALS['sqtwc_ledger_rows'][99]       = array( array( 'id' => 'row-old', 'method_id' => Gateway::ID, 'status' => $status ) );
+			$this->assert_created();
+		}
+	}
+
+	public function test_a_tile_start_beside_a_stale_pointer_whose_pro_row_is_live_goes_out(): void {
+		$this->legacy_checkout( HOUR_IN_SECONDS + 60 );
+		$GLOBALS['sqtwc_adopted']['sandbox:TC9'] = 'row-old';
+		$GLOBALS['sqtwc_ledger_rows'][99]       = array( array( 'id' => 'row-old', 'method_id' => Gateway::ID, 'status' => 'pending' ) );
+		$this->assert_created();
+	}
+
+	public function test_a_tile_start_on_a_paid_order_carrying_an_unconfirmed_create_goes_out(): void {
+		$this->unconfirmed_create( 60 )->paid = true;
+		$this->assert_created();
+	}
+
+	public function test_a_replay_of_a_row_with_a_snapshot_goes_out_beside_a_hold(): void {
+		// Its first POST may have reached Square: the keyed replay must find that checkout.
+		$this->unconfirmed_create( 60 )->update_meta_data( Square_Server_Provider::DEVICE_OPTIONS_META, array( self::ROW => array( 'skip_receipt_screen' => false, 'collect_signature' => false, 'environment' => 'sandbox' ) ) );
+		$this->assert_created();
+	}
+
+	public function test_the_hold_is_judged_on_a_fresh_copy_of_the_order(): void {
+		// A stale copy still shows the unconfirmed create; the copy read past the caches has it closed.
+		$stale = $this->unconfirmed_create( 60 );
+		$fresh = clone $stale;
+		$fresh->meta['_sqtwc_checkout_status'] = 'CANCELED';
+		$GLOBALS['sqtwc_cleaned_post_caches']      = array();
+		$GLOBALS['sqtwc_clean_post_cache_callback'] = static function ( int $id ): void {
+			$GLOBALS['sqtwc_cleaned_post_caches'][] = $id;
+		};
+		$GLOBALS['sqtwc_wc_get_order_callback'] = static function ( $id ) use ( $stale, $fresh ) {
+			return in_array( 99, $GLOBALS['sqtwc_cleaned_post_caches'], true ) ? $fresh : $stale;
+		};
+		$this->assert_created();
 	}
 }

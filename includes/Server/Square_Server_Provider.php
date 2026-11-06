@@ -8,7 +8,10 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Server;
 
 use Throwable;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
+use WCPOS\WooCommercePOS\SquareTerminal\Legacy_Adoption;
 use WCPOS\WooCommercePOS\SquareTerminal\Logger;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareDeviceAdapter;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareErrorMapper;
@@ -96,6 +99,13 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	 * {@inheritDoc}
 	 */
 	public function list_readers() {
+		if ( 'sandbox' === Settings::get_environment() ) {
+			// Square's sandbox has no paired devices; it takes these test device ids instead.
+			return array_map(
+				static fn ( array $device ): array => $device + array( 'status' => 'online' ),
+				Gateway::get_available_devices( 'sandbox' )
+			);
+		}
 		try {
 			$devices = new SquareDeviceAdapter( $this->factory->create( null, Settings::get_environment(), array( 'maxRetries' => 0 ) ) );
 			$readers = array();
@@ -118,24 +128,35 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 	 * {@inheritDoc}
 	 */
 	public function create_reader_action( array $row, string $reader_id ) {
-		$environment = Settings::get_environment();
-		$order       = wc_get_order( (int) $row['order_id'] );
+		$order = OrderMeta::reload_order( (int) $row['order_id'] );
 		if ( ! $order ) {
 			return new \WP_Error( 'wcpos_order_not_found', __( 'Order not found.', 'square-terminal-for-woocommerce' ), array( 'status' => 404 ) );
 		}
 		// The old panel's settings, saved before the row's first POST: a replay sends the first body.
 		$snapshot = (array) $order->get_meta( self::DEVICE_OPTIONS_META, true );
 		if ( ! is_array( $snapshot[ $row['id'] ] ?? null ) ) {
+			// Only a row's first POST is judged: a replay has a snapshot, its first POST may have reached
+			// Square, and it must go on so the idempotency key finds that checkout.
+			$message = Legacy_Adoption::tile_hold_message( $order );
+			if ( '' !== $message ) {
+				return new \WP_Error( 'sqtwc_legacy_attempt_held', $message, array( 'status' => 409 ) );
+			}
 			$snapshot[ $row['id'] ] = array(
 				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
 				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
+				'environment'         => Settings::get_environment(),
 			);
 			$order->update_meta_data( self::DEVICE_OPTIONS_META, array_filter( $snapshot, 'is_array' ) );
 			$order->save();
 		}
+		// A replay goes to the environment the first POST went to: after Environment is switched, the
+		// first checkout lives only there. An entry saved before the environment was kept falls back.
+		$options     = $snapshot[ $row['id'] ];
+		$environment = (string) ( $options['environment'] ?? Settings::get_environment() );
+		unset( $options['environment'] ); // Not Square's: the replayed body stays byte-identical.
 		try {
 			$checkout = $this->terminal( $environment )->create_checkout(
-				$snapshot[ $row['id'] ] + array(
+				$options + array(
 					'idempotency_key'   => (string) $row['id'],
 					'amount'            => Money_Units::minor( (string) $row['amount'], (string) $row['currency'] ),
 					'currency'          => strtoupper( (string) $row['currency'] ),
@@ -148,6 +169,10 @@ class Square_Server_Provider extends Abstract_Provider_Adapter {
 					'deadline_duration' => self::DEADLINE,
 				)
 			);
+			if ( '' === (string) ( $checkout['id'] ?? '' ) ) {
+				// A 2xx without a checkout id leaves the checkout unknown: unanswered, and the keyed replay recovers it.
+				throw new \UnexpectedValueException( 'Square answered the create without a checkout.' );
+			}
 
 			return array(
 				'ref'        => self::ref( $environment, (string) $checkout['id'] ),

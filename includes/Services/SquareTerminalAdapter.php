@@ -10,11 +10,15 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\CancelCheckoutsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\CreateTerminalCheckoutRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\GetCheckoutsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\SearchTerminalCheckoutsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceCheckoutOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Money;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Payment;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\PaymentOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckout;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckoutQuery;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckoutQueryFilter;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TimeRange;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Payments\Requests\GetPaymentsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\GetRefundsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\RefundPaymentRequest;
@@ -23,6 +27,9 @@ use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\RefundPay
  * Translates plugin arrays to typed Square Terminal checkout requests.
  */
 final class SquareTerminalAdapter {
+	/** Most pages (of 100) one search reads: far more checkouts than one reader starts in the minutes searched. */
+	private const SEARCH_MAX_PAGES = 5;
+
 	/**
 	 * Square SDK client.
 	 *
@@ -90,6 +97,52 @@ final class SquareTerminalAdapter {
 		$response = $this->client->terminal->checkouts->get( $request, $options );
 
 		return $this->normalize_checkout( $response->getCheckout() );
+	}
+
+	/**
+	 * Search a device's Terminal checkouts created since a time, every page, with their money.
+	 * The start is always set (unset, Square reads only the last day) and the end never is, so a
+	 * checkout made a moment ago on a clock slightly ahead of ours is still found.
+	 *
+	 * @param string $device_id     Square device ID.
+	 * @param string $created_after RFC 3339 start of the creation range.
+	 * @return array<int,array<string,mixed>>
+	 * @throws \RuntimeException On errors in Square's answer, or a page left unread: a partial list must never read as "not there".
+	 */
+	public function search_checkouts( string $device_id, string $created_after ): array {
+		$filter = new TerminalCheckoutQueryFilter(
+			array(
+				'deviceId'  => $device_id,
+				'createdAt' => new TimeRange( array( 'startAt' => $created_after ) ),
+			)
+		);
+		$rows   = array();
+		$cursor = null;
+		for ( $page = 0; $page < self::SEARCH_MAX_PAGES; ++$page ) {
+			$request  = new SearchTerminalCheckoutsRequest(
+				array(
+					'query'  => new TerminalCheckoutQuery( array( 'filter' => $filter ) ),
+					'cursor' => $cursor,
+					'limit'  => 100,
+				)
+			);
+			$response = $this->client->terminal->checkouts->search( $request );
+			if ( ! empty( $response->getErrors() ) ) {
+				throw new \RuntimeException( 'Square answered the checkout search with errors.' );
+			}
+			foreach ( $response->getCheckouts() ?? array() as $checkout ) { // Square omits an empty list.
+				$money  = $checkout->getAmountMoney();
+				$rows[] = $this->normalize_checkout( $checkout ) + array(
+					'amount'   => $money && null !== $money->getAmount() ? (int) $money->getAmount() : null,
+					'currency' => $money ? $money->getCurrency() : null,
+				);
+			}
+			$cursor = $response->getCursor();
+			if ( null === $cursor || '' === $cursor ) {
+				return $rows;
+			}
+		}
+		throw new \RuntimeException( 'Square has more checkouts than one search reads.' );
 	}
 
 	/**

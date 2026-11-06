@@ -85,6 +85,15 @@ final class ProPanelTest extends TestCase {
 		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
 	}
 
+	public function test_a_create_square_never_confirmed_holds_the_panel_with_a_notice(): void {
+		$order = $this->order( 99, 'TC1', 'PENDING' );
+		$order->meta['_sqtwc_checkout_id'] = '';
+		$html = $this->fields();
+		self::assertStringContainsString( 'Square never confirmed an earlier Terminal payment on this order, and it may still be open.', $html );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_panels'], 'No second charge beside a checkout Square may have made' );
+		self::assertSame( array(), $GLOBALS['sqtwc_pro_adoptions'] );
+	}
+
 	public function test_the_carve_out_keeps_the_old_panel_and_adopts_nothing(): void {
 		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = false;
 		$this->order( 99, 'TC1', 'IN_PROGRESS' );

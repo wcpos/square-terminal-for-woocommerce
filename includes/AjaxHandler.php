@@ -125,6 +125,7 @@ final class AjaxHandler {
 				'note'                => $this->checkout_note( $order ),
 				'skip_receipt_screen' => 'yes' === Settings::get( 'skip_receipt_screen', 'no' ),
 				'collect_signature'   => 'yes' === Settings::get( 'collect_signature', 'no' ),
+				'environment'         => Settings::get_environment(),
 			);
 			OrderMeta::start_attempt( $order, $current_attempt, $idempotency_key, $device_id, $create_data );
 		}
