@@ -106,6 +106,15 @@ test('error return shows localized reason and re-enables button', () => {
 	assert.equal(dom.button.disabled, false);
 });
 
+test('a live WooCommerce POS payment keeps the button off, even on an error return', () => {
+	const dom = posDom();
+	const cfg = config();
+	cfg.posBlocked = 'WooCommerce POS is taking a payment on this order.';
+	payment.createController({ root: dom.root, config: cfg, userAgent: 'Android', maxTouchPoints: 0, location: { search: '?sqtwc_pos_result=error&sqtwc_pos_code=no_network' }, navigate: function () {} });
+	assert.equal(dom.button.disabled, true);
+	assert.equal(dom.status.textContent, 'WooCommerce POS is taking a payment on this order.');
+});
+
 test('partial return is terminal: button stays disabled', () => {
 	const dom = posDom();
 	payment.createController({ root: dom.root, config: config(), userAgent: 'Android', maxTouchPoints: 0, location: { search: '?sqtwc_pos_result=partial' }, navigate: function () {} });

@@ -618,6 +618,14 @@
 				}
 
 				if (!res.ok) {
+					if (res.body && res.body.handled_by_pos) {
+						// WooCommerce POS drives this payment now: stop, and send the cashier to reload.
+						stopPolling();
+						setState(STATES.FINAL);
+						setStatus(errorMessage(res), 'warning', false);
+						log('warning', 'Payment handled by WooCommerce POS; polling stopped');
+						return;
+					}
 					onPollTransportError(seq);
 					return;
 				}
@@ -1125,6 +1133,13 @@
 			if (!config.posApplicationId || !config.posLocationId) {
 				disable(button, true);
 				setPosStatus(strings.posMissingConfig, 'warning');
+				return;
+			}
+			if (config.posBlocked) {
+				// WooCommerce POS is driving a payment on this order: no second charge from the app,
+				// whatever result the return URL carries.
+				disable(button, true);
+				setPosStatus(config.posBlocked, 'warning');
 				return;
 			}
 

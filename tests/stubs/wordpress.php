@@ -62,7 +62,7 @@ if ( ! function_exists( 'wp_register_script' ) ) { function wp_register_script( 
 if ( ! function_exists( 'wp_enqueue_script' ) ) { function wp_enqueue_script( $handle, $src = '', $deps = array(), $ver = false, $args = array() ) { $GLOBALS['sqtwc_enqueued_scripts'][] = $handle; return true; } }
 if ( ! function_exists( 'wp_localize_script' ) ) { function wp_localize_script( $handle, $object_name, $l10n ) { $GLOBALS['sqtwc_localized_scripts'][$handle] = array( 'object' => $object_name, 'data' => $l10n ); return true; } }
 if ( ! function_exists( 'wp_register_style' ) ) { function wp_register_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_registered_styles'][$handle] = $src; return true; } }
-if ( ! function_exists( 'add_query_arg' ) ) { function add_query_arg( $args, $url = '' ) { $sep = str_contains( (string) $url, '?' ) ? '&' : '?'; return $url . $sep . http_build_query( (array) $args ); } }
+if ( ! function_exists( 'add_query_arg' ) ) { function add_query_arg( $args, $url = '', $third = null ) { if ( ! is_array( $args ) ) { $args = array( $args => $url ); $url = (string) $third; } $sep = str_contains( (string) $url, '?' ) ? '&' : '?'; return $url . $sep . http_build_query( (array) $args ); } }
 // Redirect stubs throw so the exit() that follows them in production code is
 // never reached under PHPUnit, which would otherwise kill the test run.
 class SQTWC_Redirect extends \RuntimeException {}
@@ -72,10 +72,13 @@ if ( ! function_exists( 'wp_die' ) ) { function wp_die( $message = '', $title = 
 if ( ! function_exists( 'wp_remote_post' ) ) { function wp_remote_post( $url, $args = array() ) { $GLOBALS['sqtwc_remote_posts'][] = array( 'url' => $url, 'args' => $args ); return $GLOBALS['sqtwc_remote_post_response'] ?? array( 'body' => '', 'response' => array( 'code' => 200 ) ); } }
 if ( ! function_exists( 'wp_remote_retrieve_body' ) ) { function wp_remote_retrieve_body( $response ) { return is_array( $response ) ? (string) ( $response['body'] ?? '' ) : ''; } }
 if ( ! function_exists( 'is_wp_error' ) ) { function is_wp_error( $thing ) { return $thing instanceof \WP_Error; } }
-if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; public function __construct( $code = '', $message = '' ) { $this->message = (string) $message; } } }
+if ( ! class_exists( 'WP_Error' ) ) { class WP_Error { public string $message; public string $code; public $data; public function __construct( $code = '', $message = '', $data = null ) { $this->code = (string) $code; $this->message = (string) $message; $this->data = $data; } public function get_error_code() { return $this->code; } public function get_error_message() { return $this->message; } public function get_error_data() { return $this->data; } } }
 // Stands in for the official WooCommerce Square plugin's global accessor.
 if ( ! function_exists( 'wc_square' ) ) { function wc_square() { if ( ! empty( $GLOBALS['sqtwc_wc_square_throws'] ) ) { throw new \RuntimeException( 'official plugin exploded' ); } return new SQTWC_Test_Square_Plugin(); } }
 class SQTWC_Test_Square_Plugin { public function get_settings_handler() { return $GLOBALS['sqtwc_wc_square_handler'] ?? null; } }
 if ( ! function_exists( 'wp_enqueue_style' ) ) { function wp_enqueue_style( $handle, $src = '', $deps = array(), $ver = false ) { $GLOBALS['sqtwc_enqueued_styles'][] = $handle; return true; } }
 if ( ! function_exists( 'remove_filter' ) ) { function remove_filter( $hook, $callback, $priority = 10 ) { $GLOBALS['sqtwc_filters'][$hook] = array_values( array_filter( $GLOBALS['sqtwc_filters'][$hook] ?? array(), static fn( $registered ) => $registered !== $callback ) ); return true; } }
 if ( ! function_exists( 'clean_post_cache' ) ) { function clean_post_cache( $post ) { if ( isset( $GLOBALS['sqtwc_clean_post_cache_callback'] ) ) { $GLOBALS['sqtwc_clean_post_cache_callback']( (int) $post ); } } }
+
+if ( ! function_exists( 'woocommerce_pos_request' ) ) { function woocommerce_pos_request() { return $GLOBALS['sqtwc_pos_request'] ?? false; } }
+if ( ! function_exists( 'wcpos_get_settings' ) ) { function wcpos_get_settings( $group ) { return $GLOBALS['sqtwc_pos_settings'][ $group ] ?? array(); } }

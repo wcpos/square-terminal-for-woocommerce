@@ -11,7 +11,7 @@ final class SettingsLayoutTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['sqtwc_options']          = array();
 		$GLOBALS['sqtwc_transients']       = array();
-		$GLOBALS['sqtwc_filter_overrides'] = array();
+		$GLOBALS['sqtwc_filter_overrides'] = array( 'sqtwc_uses_pro_panel' => false ); // The old panel, unless a test says Pro's.
 		Gateway::reset_device_memo();
 		WooCommerceSquareHints::reset_cache_for_tests();
 		Settings::reset_cache_for_tests();
@@ -124,7 +124,7 @@ final class SettingsLayoutTest extends TestCase {
 	 * Store a verified delivery recorded under the current configuration.
 	 */
 	private function record_verified_delivery( int $at ): void {
-		( new \ReflectionMethod( WebhookHandler::class, 'record_verified_delivery' ) )->invoke( null );
+		WebhookHandler::record_verified_delivery( Settings::get_displayed_webhook_url() );
 		$stored         = $GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ];
 		$stored['at']   = $at;
 		$GLOBALS['sqtwc_options'][ WebhookHandler::LAST_DELIVERY_OPTION ] = $stored;
@@ -249,5 +249,62 @@ final class SettingsLayoutTest extends TestCase {
 		// Sites behind a proxy have a public URL WordPress cannot derive, and
 		// Square signs over the exact URL it was given.
 		self::assertSame( 'https://proxy.example/wp-json/sqtwc/v1/webhook', Settings::get_webhook_notification_url() );
+	}
+
+	public function test_under_pros_panel_the_screen_shows_the_url_square_signs_for_pros_route(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = true;
+
+		$html = Gateway::render_webhook_status();
+
+		self::assertStringContainsString( 'value="https://wcpos.local/wp-json/wcpos/v2/payments/webhook?provider=square"', $html );
+		self::assertStringNotContainsString( 'sqtwc/v1/webhook', $html );
+	}
+
+	public function test_with_the_pos_app_hand_off_the_screen_shows_the_plugins_own_route(): void {
+		unset( $GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array( 'collection_method' => 'pos_app' );
+		Settings::reset_cache_for_tests();
+
+		// Pro's panel is loaded, but the app hand-off keeps this plugin's own panel and route.
+		self::assertTrue( function_exists( 'wcpos_pro_order_pay_panel' ) );
+		self::assertStringContainsString( 'value="https://wcpos.local/wp-json/sqtwc/v1/webhook"', Gateway::render_webhook_status() );
+	}
+
+	public function test_an_override_does_not_change_the_url_under_pros_panel(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = true;
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings'] = array(
+			'webhook_notification_url' => 'https://proxy.example/wp-json/sqtwc/v1/webhook',
+		);
+		Settings::reset_cache_for_tests();
+
+		// Square_Server_Provider verifies over Pro's route alone, so that is the URL to subscribe.
+		self::assertSame( Settings::get_pro_webhook_url(), Settings::get_displayed_webhook_url() );
+		self::assertStringNotContainsString( 'proxy.example', Gateway::render_webhook_status() );
+	}
+
+	public function test_a_delivery_verified_under_the_old_panel_does_not_read_verified_under_pros(): void {
+		$this->record_verified_delivery( time() - 120 );
+		self::assertNotNull( WebhookHandler::last_verified_delivery() );
+
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = true;
+
+		self::assertNull( WebhookHandler::last_verified_delivery() );
+		self::assertStringContainsString( 'Not verified yet', Gateway::render_webhook_status() );
+	}
+
+	public function test_a_legacy_route_delivery_under_pros_panel_does_not_read_verified(): void {
+		$GLOBALS['sqtwc_filter_overrides']['sqtwc_uses_pro_panel'] = true;
+		$verifier = new class() {
+			public function verify( string $body, string $signature, string $key, string $url ): bool {
+				return true;
+			}
+		};
+
+		$result = ( new WebhookHandler( $verifier, new \stdClass() ) )->handle( '{}', array() );
+
+		// Signed for this plugin's route: says nothing about the route Pro's panel's checkouts report to.
+		self::assertSame( 202, $result['status'] );
+		self::assertNull( WebhookHandler::last_verified_delivery() );
+		self::assertStringContainsString( 'Not verified yet', Gateway::render_webhook_status() );
 	}
 }

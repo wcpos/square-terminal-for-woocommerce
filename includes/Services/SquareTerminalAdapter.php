@@ -10,17 +10,26 @@ namespace WCPOS\WooCommercePOS\SquareTerminal\Services;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\CancelCheckoutsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\CreateTerminalCheckoutRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\GetCheckoutsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Terminal\Checkouts\Requests\SearchTerminalCheckoutsRequest;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\DeviceCheckoutOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Money;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\Payment;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\PaymentOptions;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckout;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckoutQuery;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TerminalCheckoutQueryFilter;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Types\TimeRange;
 use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Payments\Requests\GetPaymentsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\GetRefundsRequest;
+use WCPOS\WooCommercePOS\SquareTerminal\Vendor\Square\Refunds\Requests\RefundPaymentRequest;
 
 /**
  * Translates plugin arrays to typed Square Terminal checkout requests.
  */
 final class SquareTerminalAdapter {
+	/** Most pages (of 100) one search reads: far more checkouts than one reader starts in the minutes searched. */
+	private const SEARCH_MAX_PAGES = 5;
+
 	/**
 	 * Square SDK client.
 	 *
@@ -60,7 +69,7 @@ final class SquareTerminalAdapter {
 					)
 				),
 				'referenceId'   => (string) $data['reference_id'],
-				'note'          => isset( $data['note'] ) ? (string) $data['note'] : null,
+				'note'          => isset( $data['note'] ) ? mb_substr( (string) $data['note'], 0, 500 ) : null, // Square allows 500 characters.
 				'deadlineDuration' => (string) ( $data['deadline_duration'] ?? 'PT5M' ),
 				'paymentOptions'   => new PaymentOptions( array( 'autocomplete' => true ) ),
 			)
@@ -91,6 +100,52 @@ final class SquareTerminalAdapter {
 	}
 
 	/**
+	 * Search a device's Terminal checkouts created since a time, every page, with their money.
+	 * The start is always set (unset, Square reads only the last day) and the end never is, so a
+	 * checkout made a moment ago on a clock slightly ahead of ours is still found.
+	 *
+	 * @param string $device_id     Square device ID.
+	 * @param string $created_after RFC 3339 start of the creation range.
+	 * @return array<int,array<string,mixed>>
+	 * @throws \RuntimeException On errors in Square's answer, or a page left unread: a partial list must never read as "not there".
+	 */
+	public function search_checkouts( string $device_id, string $created_after ): array {
+		$filter = new TerminalCheckoutQueryFilter(
+			array(
+				'deviceId'  => $device_id,
+				'createdAt' => new TimeRange( array( 'startAt' => $created_after ) ),
+			)
+		);
+		$rows   = array();
+		$cursor = null;
+		for ( $page = 0; $page < self::SEARCH_MAX_PAGES; ++$page ) {
+			$request  = new SearchTerminalCheckoutsRequest(
+				array(
+					'query'  => new TerminalCheckoutQuery( array( 'filter' => $filter ) ),
+					'cursor' => $cursor,
+					'limit'  => 100,
+				)
+			);
+			$response = $this->client->terminal->checkouts->search( $request );
+			if ( ! empty( $response->getErrors() ) ) {
+				throw new \RuntimeException( 'Square answered the checkout search with errors.' );
+			}
+			foreach ( $response->getCheckouts() ?? array() as $checkout ) { // Square omits an empty list.
+				$money  = $checkout->getAmountMoney();
+				$rows[] = $this->normalize_checkout( $checkout ) + array(
+					'amount'   => $money && null !== $money->getAmount() ? (int) $money->getAmount() : null,
+					'currency' => $money ? $money->getCurrency() : null,
+				);
+			}
+			$cursor = $response->getCursor();
+			if ( null === $cursor || '' === $cursor ) {
+				return $rows;
+			}
+		}
+		throw new \RuntimeException( 'Square has more checkouts than one search reads.' );
+	}
+
+	/**
 	 * Cancel a Terminal Checkout.
 	 *
 	 * @param string $checkout_id Square checkout ID.
@@ -118,6 +173,64 @@ final class SquareTerminalAdapter {
 	}
 
 	/**
+	 * Refund a Square payment.
+	 *
+	 * Square dedupes on the idempotency key: a replay of the same request hands back the refund
+	 * the first request made, so the caller may safely ask again when a response was lost.
+	 *
+	 * @param array<string,mixed> $data    Refund data: idempotency_key, payment_id, amount, currency, reason.
+	 * @param array<string,mixed> $options SDK request options.
+	 * @return array<string,mixed>
+	 */
+	public function refund_payment( array $data, array $options = array() ): array {
+		$request  = new RefundPaymentRequest(
+			array(
+				'idempotencyKey' => (string) $data['idempotency_key'],
+				'paymentId'      => (string) $data['payment_id'],
+				'amountMoney'    => new Money(
+					array(
+						'amount'   => (int) $data['amount'],
+						'currency' => (string) $data['currency'],
+					)
+				),
+				// Square allows 192 characters of reason.
+				'reason'         => isset( $data['reason'] ) && '' !== $data['reason'] ? mb_substr( (string) $data['reason'], 0, 192 ) : null,
+			)
+		);
+		$response = $this->client->refunds->refundPayment( $request, $options );
+
+		return $this->normalize_refund( $response->getRefund() );
+	}
+
+	/**
+	 * Retrieve and normalize a Square refund.
+	 *
+	 * @param string              $refund_id Square refund ID.
+	 * @param array<string,mixed> $options   SDK request options.
+	 */
+	public function get_refund( string $refund_id, array $options = array() ): array {
+		$response = $this->client->refunds->get( new GetRefundsRequest( array( 'refundId' => $refund_id ) ), $options );
+
+		return $this->normalize_refund( $response->getRefund() );
+	}
+
+	/** Normalize a Square PaymentRefund, or throw when there is none (untyped: tests alias the SDK lazily). */
+	private function normalize_refund( $refund ): array {
+		if ( ! $refund || '' === (string) $refund->getId() ) {
+			// A success with no refund in it says nothing: the caller treats it as unanswered.
+			throw new \UnexpectedValueException( 'Square answered the refund without a refund object.' );
+		}
+
+		return array(
+			'id'         => $refund->getId(),
+			'status'     => $refund->getStatus(),
+			'payment_id' => $refund->getPaymentId(),
+			'amount'     => $refund->getAmountMoney() ? $refund->getAmountMoney()->getAmount() : null,
+			'currency'   => $refund->getAmountMoney() ? $refund->getAmountMoney()->getCurrency() : null,
+		);
+	}
+
+	/**
 	 * Normalize a Square checkout object.
 	 *
 	 * @param TerminalCheckout|null $checkout Square checkout object.
@@ -132,6 +245,7 @@ final class SquareTerminalAdapter {
 			'updated_at'    => $checkout ? $checkout->getUpdatedAt() : null,
 			'created_at'    => $checkout ? $checkout->getCreatedAt() : null,
 			'cancel_reason' => $checkout ? $checkout->getCancelReason() : null,
+			'device_id'     => $checkout && $checkout->getDeviceOptions() ? $checkout->getDeviceOptions()->getDeviceId() : null,
 		);
 	}
 
@@ -142,9 +256,11 @@ final class SquareTerminalAdapter {
 	 * @return array<string,mixed>
 	 */
 	private function normalize_payment( ?Payment $payment ): array {
-		$total = $payment ? $payment->getTotalMoney() : null;
-		$tip   = $payment ? $payment->getTipMoney() : null;
-		$card  = $payment ? $payment->getCardDetails() : null;
+		$total  = $payment ? $payment->getTotalMoney() : null;
+		$tip    = $payment ? $payment->getTipMoney() : null;
+		$card   = $payment ? $payment->getCardDetails() : null;
+		$errors = $card ? (array) ( $card->getErrors() ?? array() ) : array();
+		$error  = $errors ? $errors[0] : null;
 
 		return array(
 			'id'             => $payment ? $payment->getId() : null,
@@ -154,6 +270,13 @@ final class SquareTerminalAdapter {
 			'tip_amount'     => $tip ? $tip->getAmount() : 0,
 			'tip_currency'   => $tip ? $tip->getCurrency() : null,
 			'card_status'    => $card ? $card->getStatus() : null,
+			'card_brand'     => $card && $card->getCard() ? $card->getCard()->getCardBrand() : null,
+			'card_last4'     => $card && $card->getCard() ? $card->getCard()->getLast4() : null,
+			'entry_method'   => $card ? $card->getEntryMethod() : null,
+			'auth_code'      => $card ? $card->getAuthResultCode() : null,
+			'error_code'     => $error && method_exists( $error, 'getCode' ) ? $error->getCode() : null,
+			'receipt_number' => $payment ? $payment->getReceiptNumber() : null,
+			'reference_id'   => $payment ? $payment->getReferenceId() : null,
 		);
 	}
 }

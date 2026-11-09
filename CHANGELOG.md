@@ -2,6 +2,41 @@
 
 All notable changes to this project are documented in this file. Release notes for each version live in `docs/releases/`.
 
+## [1.0.0]
+
+The stable release of 1.0.0-beta1, for WCPOS 2.0, with the fixes below. The rest of the changes are listed under 1.0.0-beta1.
+
+### Fixed
+
+- Under WCPOS Pro's panel, the settings screen showed the old webhook URL, and "Verified" counted deliveries Pro never sees. It now shows Pro's URL and counts only deliveries signed for it. After upgrading, change your Square webhook subscription to the URL the settings screen shows, and save that subscription's signature key here.
+- Checkouts started from WCPOS Pro's panel ignored "Skip receipt screen" and "Collect signature". They now follow both settings.
+- A refund Square answered as pending was never checked again, so a later rejection went unnoticed. WCPOS Pro's refund sweep now reads it until Square completes or rejects it, and the order note no longer calls it confirmed.
+- An order whose Square checkout was never confirmed before the upgrade could be charged again from WCPOS Pro's panel. The panel now waits an hour from that attempt, then opens with an order note telling staff to check the Square dashboard.
+- When Square did not answer a checkout started from WCPOS Pro's panel and Environment was switched before it was asked again, the plugin asked the other Square account, so a checkout the customer could still pay was never found. It now asks again in the environment the checkout was started in.
+- In sandbox, WCPOS Pro's panel listed no readers, because Square's sandbox has no paired devices. It now lists Square's five sandbox test devices, as the old panel did.
+- A payment started from the POS could put a second checkout on a Terminal while one the old payment page started was still open or never confirmed by Square. The POS now refuses that payment and tells staff what to check first.
+- When Square's answer to a new Terminal checkout was lost, the order stayed held with no way to learn whether the checkout existed. The background check now asks Square for that checkout and records it, or closes the attempt with an order note when Square has none.
+- After upgrading, a Terminal checkout the old payment page left open was handed to WCPOS Pro in whichever environment the settings named that day, so if Environment had been switched since, Pro checked and cancelled it in the wrong Square account. Pro now gets the environment the checkout was made in; for a checkout from before this was recorded, the plugin first asks Square in the current environment and, if the checkout is not there, the payment page tells staff to check the Square dashboard.
+
+## [1.0.0-beta1] - 2026-11-02
+
+First beta of 1.0.0, for the WCPOS 2.0 beta. The extension now runs on WCPOS Pro 2.0's shared payments base and requires WCPOS Pro 2.0.0 or later.
+
+### Added
+
+- **A server adapter for the WCPOS Pro 2.0 payments base.** With Pro 2.0 active, the plugin registers `Square_Server_Provider`, so the POS app drives a paired Square Terminal through Pro's ledger: a checkout per ledger row (the row id is Square's idempotency key), polling, cancellation, signed `terminal.checkout.updated` webhooks on Pro's route, and refunds through Square's Refunds API. Pro's provider conformance suite runs against the real adapter over a scripted Square in CI, with the transcripts committed. Without a compatible Pro the plugin behaves as before.
+- **Refund requests Square does not answer are asked about again** under the same idempotency key, saved on the refund record before the request, until Square confirms the refund or staff are told to check the Square dashboard. No second refund can result from a lost answer. A payment Square has approved but not completed on a checkout that already ended is treated as money that may still arrive, never as a cancellation.
+
+- **The POS order-pay page runs through WCPOS Pro's shared panel** when the collection method is a paired Terminal, driving the same adapter; refunds of a payment Pro's ledger holds go through Pro to Square's Refunds API (the gateway now declares refund support). A checkout the old panel left live on an unpaid order is adopted into Pro's ledger on upgrade and when Pro's panel renders that order; while Pro's row is live the old panel's actions answer 409 (its script stops and asks for a reload), the old webhook, sweep and status check leave the checkout alone, and once Pro's leg ends without money they act again. With the Square Point of Sale app hand-off selected the plugin keeps its own panel; a live Pro row on an order still blocks an old-panel start there, and a POS app transaction returned for an order already paid is noted on the order.
+
+### Changed
+
+- **WooCommerce POS Pro 2.0 is required.** Without a compatible Pro the plugin shows an admin notice and registers nothing (no gateway, AJAX, webhook route or sweeper). Activation records the requirement for Pro's own notice.
+- **The gateway is POS-only.** It is available on POS requests and, to users who may run the POS, on the order-pay page when POS → Settings → Checkout has it switched on; it is never offered on the shop's checkout. The "Enable Square Terminal for web checkout" checkbox is gone, and a value saved for it before the upgrade counts for nothing. The cashier assets load on the order-pay page and the POS's checkout route only.
+- The old webhook route acknowledges (202) a verified delivery whose reference is not this plugin's, instead of refusing it (400), so Square does not retry a Pro checkout's event against it.
+- The Square SDK client can be replaced through the `sqtwc_square_http_client` filter (tests script Square through it), and `SquareClientFactory::create()` accepts further SDK options.
+- `SquareTerminalAdapter` normalizes the card details, receipt number and reference of a payment, and the device of a checkout, and gains `refund_payment()`.
+
 ## [0.8.7] - 2026-10-02
 
 ### Fixed
