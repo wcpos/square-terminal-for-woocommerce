@@ -161,6 +161,7 @@ final class PluginTest extends TestCase {
 		self::assertCount( 1, $order->notes );
 		self::assertStringContainsString( 'Store Manager Sam', $order->notes[0] );
 		self::assertStringContainsString( 'TXN-HELD', $order->notes[0] );
+		self::assertStringContainsString( 'refund it in Square', $order->notes[0] );
 		self::assertGreaterThan( 0, $order->saves );
 		self::assertContains( 'edit_shop_orders', $GLOBALS['sqtwc_caps_checked'] );
 	}
