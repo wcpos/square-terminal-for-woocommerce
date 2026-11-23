@@ -540,7 +540,7 @@ final class Plugin {
 					$fresh->delete_meta_data( '_sqtwc_pos_transaction_id' );
 					$fresh->delete_meta_data( '_sqtwc_pos_unverified' );
 					$user_name = (string) wp_get_current_user()->display_name;
-					$fresh->add_order_note( sprintf( /* translators: 1: staff member's display name, 2: Square transaction id. */ __( 'Square POS app hold cleared by %1$s when the order was moved back to Pending payment. Transaction %2$s stays recorded in Square; the POS app can take payment again.', 'square-terminal-for-woocommerce' ), $user_name, $transaction_id ) );
+					$fresh->add_order_note( sprintf( /* translators: 1: staff member's display name, 2: Square transaction id. */ __( 'Square POS app hold cleared by %1$s when the order was moved back to Pending payment. Check Square transaction %2$s first: if it took money for this order, refund it in Square before taking payment again in the POS app.', 'square-terminal-for-woocommerce' ), $user_name, $transaction_id ) );
 					$fresh->save();
 				}
 			);
