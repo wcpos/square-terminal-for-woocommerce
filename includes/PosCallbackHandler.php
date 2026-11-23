@@ -177,6 +177,7 @@ final class PosCallbackHandler {
 							)
 						);
 						$locked_order->update_status( 'on-hold' );
+						$locked_order->update_meta_data( '_sqtwc_pos_unverified', 'yes' );
 						$locked_order->save();
 
 						return 'unverified';
@@ -278,8 +279,8 @@ final class PosCallbackHandler {
 	}
 
 	/**
-	 * Whether a note written by the hand-off names this order: "Order #<number>" followed by a space
-	 * or the end (the hand-off writes "Order #<number> – <store>"), so #12 never matches #12A or #12-3.
+	 * Whether a note starts with "Order #<number>" for this order,
+	 * followed by a dash separator or the end of the note.
 	 *
 	 * @param string[] $notes Payment notes.
 	 * @param object   $order WooCommerce order.
@@ -287,7 +288,7 @@ final class PosCallbackHandler {
 	private static function names_order( array $notes, $order ): bool {
 		$needle = 'Order #' . $order->get_order_number();
 		foreach ( $notes as $note ) {
-			if ( 1 === preg_match( '/' . preg_quote( $needle, '/' ) . '(?=\s|$)/', (string) $note ) ) {
+			if ( 1 === preg_match( '/^\s*' . preg_quote( $needle, '/' ) . '(?=\s+[-–—]\s|\s*$)/u', (string) $note ) ) {
 				return true;
 			}
 		}
