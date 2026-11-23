@@ -964,6 +964,9 @@ class Gateway extends \WC_Payment_Gateway {
 			return __( 'Add a valid Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' );
 		}
 		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
+			if ( 'yes' === (string) $order->get_meta( '_sqtwc_pos_unverified', true ) ) {
+				return __( 'Payment needs checking in the Square Dashboard before this order is completed.', 'square-terminal-for-woocommerce' );
+			}
 			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
 		}
 		if ( $order && Legacy_Adoption::pro_has_live_row( $order ) ) {
