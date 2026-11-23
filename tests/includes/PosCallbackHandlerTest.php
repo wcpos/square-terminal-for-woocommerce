@@ -187,6 +187,8 @@ final class PosCallbackHandlerTest extends TestCase {
 			'leading space'          => array( array( '  Order #99 – Shop' ) ),
 			'number only'            => array( array( 'Order #99' ) ),
 			'empty store name'       => array( array( 'Order #99 – ' ) ),
+			'trimmed empty store name' => array( array( 'Order #99 –' ) ),
+			'no space after the dash' => array( array( 'Order #99 –Shop' ) ),
 			'store name with digits' => array( array( 'Order #99 – Order #1 Pizza' ) ),
 		);
 	}
