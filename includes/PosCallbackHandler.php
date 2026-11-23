@@ -280,7 +280,7 @@ final class PosCallbackHandler {
 
 	/**
 	 * Whether a note starts with "Order #<number>" for this order,
-	 * followed by a dash separator or the end of the note.
+	 * followed by whitespace and a dash, or the end of the note.
 	 *
 	 * @param string[] $notes Payment notes.
 	 * @param object   $order WooCommerce order.
@@ -288,7 +288,7 @@ final class PosCallbackHandler {
 	private static function names_order( array $notes, $order ): bool {
 		$needle = 'Order #' . $order->get_order_number();
 		foreach ( $notes as $note ) {
-			if ( 1 === preg_match( '/^\s*' . preg_quote( $needle, '/' ) . '(?=\s+[-–—]\s|\s*$)/u', (string) $note ) ) {
+			if ( 1 === preg_match( '/^\s*' . preg_quote( $needle, '/' ) . '(?=\s+[-–—]|\s*$)/u', (string) $note ) ) {
 				return true;
 			}
 		}
