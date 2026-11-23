@@ -144,6 +144,35 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertFalse( $this->order->paid );
 	}
 
+	/**
+	 * @dataProvider notes_that_do_not_name_this_order
+	 */
+	public function test_unpaid_order_is_not_completed_by_a_transaction_that_does_not_name_it( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-other', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+		self::assertSame( 0, $this->order->payment_complete_calls );
+		self::assertSame( '', (string) $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertArrayNotHasKey( 'sqtwc_pos_txn_' . md5( 'sq-other' ), $GLOBALS['sqtwc_options'] );
+	}
+
+	public function notes_that_do_not_name_this_order(): array {
+		return array(
+			'another order'          => array( array( 'Order #990 – Shop' ) ),
+			'look-alike order number' => array( array( 'Order #99A – Shop', 'Order #99-3' ) ),
+			'no note at all'         => array( array() ),
+			'empty notes'            => array( array( '', '' ) ),
+		);
+	}
+
+	public function test_unpaid_order_is_completed_by_a_transaction_whose_server_note_names_it(): void {
+		$this->verifier->result['notes'] = array( '', 'Order #99' );
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertTrue( $this->order->paid );
+	}
+
 	public function test_verified_payment_records_transaction_claim(): void {
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
 		self::assertSame( '99', $GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-order' ) ] );
