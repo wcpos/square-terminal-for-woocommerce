@@ -9,6 +9,7 @@ namespace WCPOS\WooCommercePOS\SquareTerminal;
 
 use Throwable;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
+use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderMeta;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\PaymentSweeper;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\PosTransactionVerifier;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\SquareClientFactory;
@@ -80,6 +81,7 @@ final class Plugin {
 		add_action( 'admin_post_sqtwc_square_callback', array( $this, 'handle_square_callback' ) );
 		add_action( 'admin_post_sqtwc_square_disconnect', array( $this, 'handle_square_disconnect' ) );
 		add_action( 'woocommerce_order_status_changed', array( $this, 'cancel_open_attempt_on_order_status_change' ), 10, 4 );
+		add_action( 'woocommerce_order_status_changed', array( $this, 'clear_pos_hold_on_manual_pending' ), 10, 4 );
 		add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
 		$this->create_payment_sweeper()->register();
 	}
@@ -498,6 +500,53 @@ final class Plugin {
 		} catch ( Throwable $exception ) {
 			Logger::error(
 				'Order status transition Terminal cancel failed',
+				array(
+					'order_id'        => $order_id,
+					'exception_class' => get_class( $exception ),
+					'detail'          => $exception->getMessage(),
+				)
+			);
+		}
+	}
+
+	/**
+	 * Clear the Square POS app hold when staff move an order back to pending.
+	 *
+	 * @param int         $order_id Order ID.
+	 * @param string      $from     Previous order status.
+	 * @param string      $to       New order status.
+	 * @param object|null $order    WooCommerce order.
+	 */
+	public function clear_pos_hold_on_manual_pending( $order_id, $from, $to, $order = null ): void {
+		unset( $from, $order );
+		if ( 'pending' !== $to ) {
+			return;
+		}
+		if ( ! current_user_can( 'edit_shop_orders' ) ) {
+			return;
+		}
+		try {
+			$this->order_lock->with_lock(
+				absint( $order_id ),
+				function () use ( $order_id ): void {
+					$fresh = OrderMeta::reload_order( absint( $order_id ) );
+					if ( ! $fresh ) {
+						return;
+					}
+					$transaction_id = (string) $fresh->get_meta( '_sqtwc_pos_transaction_id', true );
+					if ( '' === $transaction_id ) {
+						return;
+					}
+					$fresh->delete_meta_data( '_sqtwc_pos_transaction_id' );
+					$fresh->delete_meta_data( '_sqtwc_pos_unverified' );
+					$user_name = (string) wp_get_current_user()->display_name;
+					$fresh->add_order_note( sprintf( /* translators: 1: staff member's display name, 2: Square transaction id. */ __( 'Square POS app hold cleared by %1$s when the order was moved back to Pending payment. Check Square transaction %2$s first: if it took money for this order, refund it in Square before taking payment again in the POS app.', 'square-terminal-for-woocommerce' ), $user_name, $transaction_id ) );
+					$fresh->save();
+				}
+			);
+		} catch ( Throwable $exception ) {
+			Logger::error(
+				'Square POS hold clear failed',
 				array(
 					'order_id'        => $order_id,
 					'exception_class' => get_class( $exception ),

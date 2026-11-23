@@ -80,6 +80,8 @@ final class PluginTest extends TestCase {
 		$GLOBALS['sqtwc_transients']       = array();
 		$GLOBALS['sqtwc_current_user_can'] = true;
 		$GLOBALS['sqtwc_nonce_valid']      = true;
+		$GLOBALS['sqtwc_current_user']     = (object) array( 'ID' => 7, 'display_name' => 'Store Manager Sam' );
+		$GLOBALS['sqtwc_caps_checked']     = array();
 		$_POST                             = array();
 		Settings::reset_cache_for_tests();
 	}
@@ -116,6 +118,83 @@ final class PluginTest extends TestCase {
 
 		$plugin->cancel_open_attempt_on_order_status_change( 99, 'pending', 'failed', $order );
 		self::assertSame( 1, $handler->calls );
+	}
+
+	private static function held_order( bool $unverified ): \SQTWC_Test_Order {
+		$order         = new \SQTWC_Test_Order( 99 );
+		$order->status = 'pending';
+		$order->update_meta_data( '_sqtwc_pos_transaction_id', 'TXN-HELD' );
+		$order->update_meta_data( '_sqtwc_payment_ids', array( 'PAY-1' ) );
+		if ( $unverified ) {
+			$order->update_meta_data( '_sqtwc_pos_unverified', 'yes' );
+		}
+		$GLOBALS['sqtwc_orders'][99] = $order;
+
+		return $order;
+	}
+
+	public function test_registers_the_pos_hold_clear_on_status_change(): void {
+		$GLOBALS['sqtwc_actions'] = array();
+		$plugin                   = new Plugin();
+
+		$plugin->init();
+
+		self::assertContains( array( $plugin, 'clear_pos_hold_on_manual_pending' ), $GLOBALS['sqtwc_actions']['woocommerce_order_status_changed'] ?? array() );
+	}
+
+	public static function heldOrders(): array {
+		return array(
+			'unverified hold' => array( true ),
+			'partial hold'    => array( false ),
+		);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'heldOrders' )]
+	public function test_a_manual_move_back_to_pending_clears_the_square_hold( bool $unverified ): void {
+		$order = self::held_order( $unverified );
+
+		( new Plugin() )->clear_pos_hold_on_manual_pending( 99, 'on-hold', 'pending', $order );
+
+		self::assertSame( '', $order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertSame( '', $order->get_meta( '_sqtwc_pos_unverified', true ) );
+		self::assertSame( array( 'PAY-1' ), $order->get_meta( '_sqtwc_payment_ids', true ) );
+		self::assertCount( 1, $order->notes );
+		self::assertStringContainsString( 'Store Manager Sam', $order->notes[0] );
+		self::assertStringContainsString( 'TXN-HELD', $order->notes[0] );
+		self::assertStringContainsString( 'refund it in Square', $order->notes[0] );
+		self::assertGreaterThan( 0, $order->saves );
+		self::assertContains( 'edit_shop_orders', $GLOBALS['sqtwc_caps_checked'] );
+	}
+
+	public static function holdsThatStay(): array {
+		return array(
+			'cancelled'  => array( 'cancelled', true ),
+			'on-hold'    => array( 'on-hold', true ),
+			'processing' => array( 'processing', true ),
+			'no user'    => array( 'pending', false ),
+		);
+	}
+
+	#[\PHPUnit\Framework\Attributes\DataProvider( 'holdsThatStay' )]
+	public function test_the_square_hold_stays_otherwise( string $to, bool $can_edit ): void {
+		$GLOBALS['sqtwc_current_user_can'] = $can_edit;
+		$order                             = self::held_order( true );
+
+		( new Plugin() )->clear_pos_hold_on_manual_pending( 99, 'on-hold', $to, $order );
+
+		self::assertSame( 'TXN-HELD', $order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertSame( 'yes', $order->get_meta( '_sqtwc_pos_unverified', true ) );
+		self::assertSame( array(), $order->notes );
+	}
+
+	public function test_a_move_to_pending_without_a_hold_writes_nothing(): void {
+		$order                       = new \SQTWC_Test_Order( 99 );
+		$GLOBALS['sqtwc_orders'][99] = $order;
+
+		( new Plugin() )->clear_pos_hold_on_manual_pending( 99, 'failed', 'pending', $order );
+
+		self::assertSame( array(), $order->notes );
+		self::assertSame( 0, $order->saves );
 	}
 
 	public function test_registers_admin_device_actions_without_nopriv_variants(): void {
