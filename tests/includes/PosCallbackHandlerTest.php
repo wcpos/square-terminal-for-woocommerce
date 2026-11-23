@@ -165,6 +165,7 @@ final class PosCallbackHandlerTest extends TestCase {
 			'look-alike order number' => array( array( 'Order #99A – Shop', 'Order #99-3' ) ),
 			'store name naming this order' => array( array( 'Order #1 – Order #99 Pizza' ) ),
 			'order number with a space'    => array( array( 'Order #99 B – Shop' ) ),
+			'store named after this order' => array( array( 'Order #1 – Order #99' ) ),
 		);
 	}
 
