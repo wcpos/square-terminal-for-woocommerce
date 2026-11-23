@@ -154,6 +154,10 @@ final class PosCallbackHandler {
 					if ( (string) ( $verified['location_id'] ?? '' ) !== $location_id ) {
 						throw new \RuntimeException( 'Square POS payment location does not match the configured location.' );
 					}
+					$names_this_order = self::names_order( (array) ( $verified['notes'] ?? array() ), $locked_order );
+					if ( ! $names_this_order && self::names_any_order( (array) ( $verified['notes'] ?? array() ) ) ) {
+						throw new \RuntimeException( 'Square POS transaction names another order.' );
+					}
 					if ( ! self::claim_transaction( $callback['transaction_id'], $order_id ) ) {
 						throw new \RuntimeException( 'Square POS transaction is already assigned to another order.' );
 					}
@@ -163,6 +167,20 @@ final class PosCallbackHandler {
 					$requested   = CurrencyConverter::to_minor_units( $locked_order->get_total(), $locked_order->get_currency() );
 					$locked_order->update_meta_data( '_sqtwc_pos_transaction_id', $callback['transaction_id'] );
 					$locked_order->update_meta_data( '_sqtwc_payment_ids', $payment_ids );
+
+					if ( ! $names_this_order ) {
+						$locked_order->add_order_note(
+							sprintf(
+								/* translators: %s: Square transaction id. */
+								__( 'Square POS app transaction %s does not name this order. Verify the payment in the Square Dashboard before completing the order.', 'square-terminal-for-woocommerce' ),
+								$callback['transaction_id']
+							)
+						);
+						$locked_order->update_status( 'on-hold' );
+						$locked_order->save();
+
+						return 'unverified';
+					}
 
 					if ( $collected < $requested ) {
 						$locked_order->add_order_note(
@@ -216,6 +234,9 @@ final class PosCallbackHandler {
 		if ( 'partial' === $outcome ) {
 			$this->redirect_to_payment( $order, 'partial' );
 		}
+		if ( 'unverified' === $outcome ) {
+			$this->redirect_to_payment( $order, 'unverified' );
+		}
 		$this->redirect_to_receipt( $order );
 	}
 
@@ -267,6 +288,17 @@ final class PosCallbackHandler {
 		$needle = 'Order #' . $order->get_order_number();
 		foreach ( $notes as $note ) {
 			if ( 1 === preg_match( '/' . preg_quote( $needle, '/' ) . '(?=\s|$)/', (string) $note ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/** Whether any payment note names an order ("Order #" followed by a non-space character). */
+	private static function names_any_order( array $notes ): bool {
+		foreach ( $notes as $note ) {
+			if ( 1 === preg_match( '/Order #\S/', (string) $note ) ) {
 				return true;
 			}
 		}

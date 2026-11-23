@@ -58,7 +58,8 @@ function config() {
 			posOffline: 'Offline payment needs verification.',
 			posError: 'Payment was not completed: %s',
 			posMissingConfig: 'Missing application ID or location.',
-			posPartial: 'Partial payment recorded; order on hold.'
+			posPartial: 'Partial payment recorded; order on hold.',
+			posUnverified: 'Payment needs checking in the Square Dashboard.'
 		}
 	};
 }
@@ -119,6 +120,13 @@ test('partial return is terminal: button stays disabled', () => {
 	const dom = posDom();
 	payment.createController({ root: dom.root, config: config(), userAgent: 'Android', maxTouchPoints: 0, location: { search: '?sqtwc_pos_result=partial' }, navigate: function () {} });
 	assert.equal(dom.status.textContent, 'Partial payment recorded; order on hold.');
+	assert.equal(dom.button.disabled, true);
+});
+
+test('unverified return is terminal: button stays disabled', () => {
+	const dom = posDom();
+	payment.createController({ root: dom.root, config: config(), userAgent: 'Android', maxTouchPoints: 0, location: { search: '?sqtwc_pos_result=unverified' }, navigate: function () {} });
+	assert.equal(dom.status.textContent, 'Payment needs checking in the Square Dashboard.');
 	assert.equal(dom.button.disabled, true);
 });
 

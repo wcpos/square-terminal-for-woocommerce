@@ -144,6 +144,71 @@ final class PosCallbackHandlerTest extends TestCase {
 		self::assertFalse( $this->order->paid );
 	}
 
+	/**
+	 * @dataProvider notes_that_name_another_order
+	 */
+	public function test_unpaid_order_is_not_completed_by_a_transaction_that_names_another_order( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-other', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+		self::assertSame( 0, $this->order->payment_complete_calls );
+		self::assertSame( 'pending', $this->order->status );
+		self::assertSame( '', (string) $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertArrayNotHasKey( 'sqtwc_pos_txn_' . md5( 'sq-other' ), $GLOBALS['sqtwc_options'] );
+	}
+
+	public function notes_that_name_another_order(): array {
+		return array(
+			'another order'           => array( array( 'Order #990 – Shop' ) ),
+			'look-alike order number' => array( array( 'Order #99A – Shop', 'Order #99-3' ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider notes_that_name_no_order
+	 */
+	public function test_unpaid_order_is_held_for_dashboard_check_when_the_transaction_names_no_order( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'sqtwc_pos_result=unverified', $url );
+		self::assertStringNotContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+		self::assertSame( 0, $this->order->payment_complete_calls );
+		self::assertSame( 'on-hold', $this->order->status );
+		self::assertSame( 'sq-unnamed', $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertSame( '99', $GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-unnamed' ) ] );
+		self::assertStringContainsString( 'sq-unnamed', implode( "\n", $this->order->notes ) );
+		self::assertStringContainsString( 'Square Dashboard', implode( "\n", $this->order->notes ) );
+	}
+
+	public function notes_that_name_no_order(): array {
+		return array(
+			'no note at all'        => array( array() ),
+			'empty notes'           => array( array( '', '' ) ),
+			'note without an order' => array( array( 'Thanks!' ) ),
+		);
+	}
+
+	public function test_transaction_held_for_one_order_cannot_be_claimed_by_another(): void {
+		$this->verifier->result['notes'] = array();
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		$other                       = new \SQTWC_Test_Order( 100 );
+		$other->key                  = 'other-key';
+		$GLOBALS['sqtwc_orders'][100] = $other;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => wp_json_encode( array( 'o' => 100, 'k' => 'other-key' ) ) ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $other->paid );
+		self::assertSame( 'pending', $other->status );
+	}
+
+	public function test_unpaid_order_is_completed_by_a_transaction_whose_server_note_names_it(): void {
+		$this->verifier->result['notes'] = array( '', 'Order #99' );
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertTrue( $this->order->paid );
+	}
+
 	public function test_verified_payment_records_transaction_claim(): void {
 		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
 		self::assertSame( '99', $GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-order' ) ] );
