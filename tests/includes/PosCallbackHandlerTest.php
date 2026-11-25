@@ -2,6 +2,7 @@
 namespace WCPOS\WooCommercePOS\SquareTerminal\Tests\Includes;
 
 use PHPUnit\Framework\TestCase;
+use WCPOS\WooCommercePOS\SquareTerminal\Gateway;
 use WCPOS\WooCommercePOS\SquareTerminal\PosCallbackHandler;
 use WCPOS\WooCommercePOS\SquareTerminal\Services\OrderLock;
 use WCPOS\WooCommercePOS\SquareTerminal\Settings;
@@ -142,6 +143,123 @@ final class PosCallbackHandlerTest extends TestCase {
 		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'state' => $this->state() ) ) ) );
 		self::assertStringContainsString( 'verification_failed', $url );
 		self::assertFalse( $this->order->paid );
+	}
+
+	/**
+	 * @dataProvider notes_that_name_another_order
+	 */
+	public function test_unpaid_order_is_not_completed_by_a_transaction_that_names_another_order( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-other', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+		self::assertSame( 0, $this->order->payment_complete_calls );
+		self::assertSame( 'pending', $this->order->status );
+		self::assertSame( '', (string) $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertArrayNotHasKey( 'sqtwc_pos_txn_' . md5( 'sq-other' ), $GLOBALS['sqtwc_options'] );
+	}
+
+	public function notes_that_name_another_order(): array {
+		return array(
+			'another order'           => array( array( 'Order #990 – Shop' ) ),
+			'look-alike order number' => array( array( 'Order #99A – Shop', 'Order #99-3' ) ),
+			'store name naming this order' => array( array( 'Order #1 – Order #99 Pizza' ) ),
+			'order number with a space'    => array( array( 'Order #99 B – Shop' ) ),
+			'store named after this order' => array( array( 'Order #1 – Order #99' ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider hand_off_notes_that_name_this_order
+	 */
+	public function test_unpaid_order_is_completed_when_the_hand_off_note_names_it( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertTrue( $this->order->paid );
+	}
+
+	public function hand_off_notes_that_name_this_order(): array {
+		return array(
+			'en dash'                => array( array( 'Order #99 – Shop' ) ),
+			'hyphen'                 => array( array( 'Order #99 - Shop' ) ),
+			'em dash'                => array( array( 'Order #99 — Shop' ) ),
+			'leading space'          => array( array( '  Order #99 – Shop' ) ),
+			'number only'            => array( array( 'Order #99' ) ),
+			'empty store name'       => array( array( 'Order #99 – ' ) ),
+			'trimmed empty store name' => array( array( 'Order #99 –' ) ),
+			'no space after the dash' => array( array( 'Order #99 –Shop' ) ),
+			'store name with digits' => array( array( 'Order #99 – Order #1 Pizza' ) ),
+		);
+	}
+
+	private function render_after_return( array $verifier_result ): string {
+		foreach ( $verifier_result as $key => $value ) {
+			$this->verifier->result[ $key ] = $value;
+		}
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-held', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( 'on-hold', $this->order->status );
+		$GLOBALS['sqtwc_options']['woocommerce_sqtwc_settings']['pos_application_id'] = 'sq0idp-AbCdEf1234567890_-xyZA';
+		Settings::reset_cache_for_tests();
+		return Gateway::render_payment_ui( 99 );
+	}
+
+	public function test_reloading_an_order_held_for_a_dashboard_check_says_so(): void {
+		$html = $this->render_after_return( array( 'notes' => array() ) );
+		self::assertStringContainsString( 'data-sqtwc-action="pos-open" disabled', $html );
+		self::assertStringContainsString( 'Payment needs checking in the Square Dashboard before this order is completed.', $html );
+		self::assertStringNotContainsString( 'partial Square payment', $html );
+	}
+
+	public function test_reloading_an_order_held_for_a_partial_payment_keeps_its_wording(): void {
+		$html = $this->render_after_return( array( 'amount' => 1000 ) );
+		self::assertStringContainsString( 'data-sqtwc-action="pos-open" disabled', $html );
+		self::assertStringContainsString( 'A partial Square payment was recorded', $html );
+		self::assertStringNotContainsString( 'Square Dashboard before this order is completed', $html );
+	}
+
+	/**
+	 * @dataProvider notes_that_name_no_order
+	 */
+	public function test_unpaid_order_is_held_for_dashboard_check_when_the_transaction_names_no_order( array $notes ): void {
+		$this->verifier->result['notes'] = $notes;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertStringContainsString( 'sqtwc_pos_result=unverified', $url );
+		self::assertStringNotContainsString( 'verification_failed', $url );
+		self::assertFalse( $this->order->paid );
+		self::assertSame( 0, $this->order->payment_complete_calls );
+		self::assertSame( 'on-hold', $this->order->status );
+		self::assertSame( 'sq-unnamed', $this->order->get_meta( '_sqtwc_pos_transaction_id', true ) );
+		self::assertSame( '99', $GLOBALS['sqtwc_options'][ 'sqtwc_pos_txn_' . md5( 'sq-unnamed' ) ] );
+		self::assertStringContainsString( 'sq-unnamed', implode( "\n", $this->order->notes ) );
+		self::assertStringContainsString( 'Square Dashboard', implode( "\n", $this->order->notes ) );
+	}
+
+	public function notes_that_name_no_order(): array {
+		return array(
+			'no note at all'        => array( array() ),
+			'empty notes'           => array( array( '', '' ) ),
+			'note without an order' => array( array( 'Thanks!' ) ),
+		);
+	}
+
+	public function test_transaction_held_for_one_order_cannot_be_claimed_by_another(): void {
+		$this->verifier->result['notes'] = array();
+		$this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		$other                       = new \SQTWC_Test_Order( 100 );
+		$other->key                  = 'other-key';
+		$GLOBALS['sqtwc_orders'][100] = $other;
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-unnamed', 'status' => 'ok', 'state' => wp_json_encode( array( 'o' => 100, 'k' => 'other-key' ) ) ) ) ) );
+		self::assertStringContainsString( 'verification_failed', $url );
+		self::assertFalse( $other->paid );
+		self::assertSame( 'pending', $other->status );
+	}
+
+	public function test_unpaid_order_is_completed_by_a_transaction_whose_server_note_names_it(): void {
+		$this->verifier->result['notes'] = array( '', 'Order #99' );
+		$url = $this->handle_redirect( array( 'data' => wp_json_encode( array( 'transaction_id' => 'sq-order', 'status' => 'ok', 'state' => $this->state() ) ) ) );
+		self::assertSame( '/thank-you', $url );
+		self::assertTrue( $this->order->paid );
 	}
 
 	public function test_verified_payment_records_transaction_claim(): void {

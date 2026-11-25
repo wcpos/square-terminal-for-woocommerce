@@ -1148,6 +1148,11 @@
 				setPosStatus(strings.posPartial, 'warning');
 				return;
 			}
+			if (params.sqtwc_pos_result === 'unverified') {
+				disable(button, true);
+				setPosStatus(strings.posUnverified, 'warning');
+				return;
+			}
 			if (params.sqtwc_pos_result === 'offline') {
 				disable(button, false);
 				setPosStatus(strings.posOffline, 'warning');

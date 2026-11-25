@@ -479,6 +479,7 @@ class Gateway extends \WC_Payment_Gateway {
 			'posProductionRequired' => __( 'The Square POS app handoff requires the production environment.', 'square-terminal-for-woocommerce' ),
 			'posMissingConfig'   => __( 'Add a valid Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' ),
 			'posPartial'         => __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' ),
+			'posUnverified'      => __( 'Payment needs checking in the Square Dashboard before this order is completed.', 'square-terminal-for-woocommerce' ),
 			'posOffline'         => __( 'Payment was taken offline in the Square app. The order will need manual verification once the Square app is back online.', 'square-terminal-for-woocommerce' ),
 			/* translators: %s: Square POS app error code. */
 			'posError'           => __( 'Payment was not completed: %s', 'square-terminal-for-woocommerce' ),
@@ -963,6 +964,9 @@ class Gateway extends \WC_Payment_Gateway {
 			return __( 'Add a valid Square application ID and location ID in the gateway settings before using the Square POS app handoff.', 'square-terminal-for-woocommerce' );
 		}
 		if ( $order && ! $order->is_paid() && '' !== (string) $order->get_meta( '_sqtwc_pos_transaction_id', true ) ) {
+			if ( 'yes' === (string) $order->get_meta( '_sqtwc_pos_unverified', true ) ) {
+				return __( 'Payment needs checking in the Square Dashboard before this order is completed.', 'square-terminal-for-woocommerce' );
+			}
 			return __( 'A partial Square payment was recorded and the order is on hold. Review the order in WooCommerce before taking further payment.', 'square-terminal-for-woocommerce' );
 		}
 		if ( $order && Legacy_Adoption::pro_has_live_row( $order ) ) {

@@ -173,6 +173,7 @@ final class RacePosVerifier {
 			'amount'      => 1234,
 			'currency'    => 'USD',
 			'location_id' => 'LOC',
+			'notes'       => array( 'Order #7 – Shop' ),
 		);
 	}
 }
